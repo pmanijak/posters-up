@@ -136,7 +136,7 @@ export default function Home() {
       {results && (
         <div className="space-y-2">
           <p className="font-medium">{results.events_extracted} events extracted</p>
-          <pre className="bg-gray-100 rounded p-4 text-xs overflow-auto">
+          <pre className="rounded p-4 text-xs overflow-auto">
             {JSON.stringify(results, null, 2)}
           </pre>
         </div>
