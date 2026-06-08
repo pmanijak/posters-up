@@ -162,6 +162,10 @@ Deno.serve(async (req) => {
     return respond({ error: "Method not allowed" }, 405);
   }
 
+  // Collects non-fatal issues to return alongside results.
+  // Lets callers see exactly what went wrong without digging through logs.
+  const warnings: string[] = [];
+
   // ── Auth ──────────────────────────────────────────────────────────────────
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return respond({ error: "Unauthorized" }, 401);
@@ -175,27 +179,51 @@ Deno.serve(async (req) => {
   if (authError || !user) return respond({ error: "Unauthorized" }, 401);
 
   // ── Parse request ─────────────────────────────────────────────────────────
-  const { photo_path, lat, lng, capture_date, board_id } = await req.json();
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return respond({ error: "Invalid JSON body" }, 400);
+  }
+
+  const { photo_path, lat, lng, capture_date, board_id } = body;
   if (!photo_path) {
     return respond({ error: "photo_path required" }, 400);
   }
 
+  // Warn if GPS is missing — board won't be created or matched
+  if (!board_id && (!lat || !lng)) {
+    warnings.push("No GPS coordinates or board_id provided — photo will not be linked to a board");
+  }
+
   // ── Rate limiting ─────────────────────────────────────────────────────────
+  // Note: uses created_at (the actual column name on the photos table)
   const today = new Date().toISOString().split("T")[0];
-  const { count } = await supabase
+  const { count, error: countError } = await supabase
     .from("photos")
     .select("*", { count: "exact", head: true })
     .eq("submitted_by", user.id)
-    .gte("submitted_at", `${today}T00:00:00Z`);
+    .gte("created_at", `${today}T00:00:00Z`);
 
-  const { data: limitConfig } = await supabase
+  if (countError) {
+    // Don't block the submission — just warn and proceed
+    warnings.push(`Rate limit check failed: ${countError.message}`);
+    console.error("Rate limit query error:", JSON.stringify(countError));
+  }
+
+  const { data: limitConfig, error: configError } = await supabase
     .from("config")
     .select("value")
     .eq("key", "max_daily_submissions_per_user")
     .single();
 
+  if (configError) {
+    warnings.push("Could not read rate limit config — using default of 20");
+    console.error("Config fetch error:", JSON.stringify(configError));
+  }
+
   const maxSubmissions = parseInt(limitConfig?.value ?? "20");
-  if ((count ?? 0) >= maxSubmissions) {
+  if (!countError && (count ?? 0) >= maxSubmissions) {
     return respond({ error: "Daily submission limit reached" }, 429);
   }
 
@@ -205,7 +233,9 @@ Deno.serve(async (req) => {
     .download(photo_path);
 
   if (downloadError || !photoBlob) {
-    return respond({ error: "Photo not found" }, 404);
+    // Hard failure — nothing to extract without the photo
+    console.error("Photo download error:", JSON.stringify(downloadError));
+    return respond({ error: "Photo not found", detail: downloadError?.message }, 404);
   }
 
   const arrayBuffer = await photoBlob.arrayBuffer();
@@ -219,43 +249,59 @@ Deno.serve(async (req) => {
   const mimeType = photoBlob.type || "image/jpeg";
 
   // ── Resolve board ─────────────────────────────────────────────────────────
-  let resolvedBoardId = board_id ?? null;
+  let resolvedBoardId: string | null = board_id ?? null;
 
   if (!resolvedBoardId && lat && lng) {
-    const { data: nearby } = await supabase.rpc("find_nearby_board", {
+    const { data: nearby, error: rpcError } = await supabase.rpc("find_nearby_board", {
       p_lat: lat,
       p_lng: lng,
       p_radius_meters: 20,
     });
 
-    if (nearby && nearby.length > 0) {
+    if (rpcError) {
+      warnings.push(`Board lookup failed: ${rpcError.message}`);
+      console.error("find_nearby_board error:", JSON.stringify(rpcError));
+    } else if (nearby && nearby.length > 0) {
       resolvedBoardId = nearby[0].id;
+      console.log("Found existing board:", resolvedBoardId);
     } else {
       const { data: newBoard, error: boardError } = await supabase
         .from("boards")
         .insert({ geolocation: `SRID=4326;POINT(${lng} ${lat})` })
         .select("id")
         .single();
-      if (boardError) console.error("Board insert failed:", JSON.stringify(boardError));
-      resolvedBoardId = newBoard?.id ?? null;
+
+      if (boardError) {
+        warnings.push(`Board creation failed: ${boardError.message}`);
+        console.error("Board insert error:", JSON.stringify(boardError));
+      } else {
+        resolvedBoardId = newBoard?.id ?? null;
+        console.log("Created new board:", resolvedBoardId);
+      }
     }
   }
 
-  console.log("Resolved board_id:", resolvedBoardId, "lat:", lat, "lng:", lng);
+  console.log("Board resolved:", resolvedBoardId ?? "none", "| lat:", lat, "| lng:", lng);
 
   // ── Board context ─────────────────────────────────────────────────────────
   let boardDescription: string | null = null;
   let knownEvents: { name: string; date_start: string | null }[] | null = null;
 
   if (resolvedBoardId) {
-    const { data: board } = await supabase
+    const { data: board, error: boardFetchError } = await supabase
       .from("boards")
       .select("description")
       .eq("id", resolvedBoardId)
       .single();
-    boardDescription = board?.description ?? null;
 
-    const { data: flyers } = await supabase
+    if (boardFetchError) {
+      warnings.push(`Could not fetch board context: ${boardFetchError.message}`);
+      console.error("Board context fetch error:", JSON.stringify(boardFetchError));
+    } else {
+      boardDescription = board?.description ?? null;
+    }
+
+    const { data: flyers, error: flyersError } = await supabase
       .from("board_flyers")
       .select("events(name, date_start)")
       .eq("board_id", resolvedBoardId)
@@ -263,7 +309,10 @@ Deno.serve(async (req) => {
       .order("last_seen_at", { ascending: false })
       .limit(10);
 
-    if (flyers?.length) {
+    if (flyersError) {
+      warnings.push(`Could not fetch known board events: ${flyersError.message}`);
+      console.error("Board flyers fetch error:", JSON.stringify(flyersError));
+    } else if (flyers?.length) {
       knownEvents = flyers
         .map((f: any) => ({
           name: f.events?.name,
@@ -311,7 +360,8 @@ Deno.serve(async (req) => {
   if (!claudeRes.ok) {
     const err = await claudeRes.text();
     console.error("Claude API error:", claudeRes.status, err);
-    return respond({ error: "Claude API error", detail: err }, 502);
+    // Hard failure — no extraction without Claude
+    return respond({ error: "Claude API error", detail: err, warnings }, 502);
   }
 
   const claudeData = await claudeRes.json();
@@ -320,11 +370,19 @@ Deno.serve(async (req) => {
   let extractedItems: any[];
   try {
     extractedItems = JSON.parse(rawText);
-    if (!Array.isArray(extractedItems)) throw new Error("Expected array");
-  } catch {
-    console.error("Parse failed. Raw text:", rawText.slice(0, 500));
-    return respond({ error: "Failed to parse extraction response" }, 500);
+    if (!Array.isArray(extractedItems)) throw new Error("Response was not a JSON array");
+  } catch (parseErr: any) {
+    console.error("Claude response parse failed. Raw text:", rawText.slice(0, 500));
+    // Hard failure — can't write garbage to the DB
+    return respond({
+      error: "Failed to parse extraction response",
+      detail: parseErr.message,
+      raw_preview: rawText.slice(0, 200),
+      warnings,
+    }, 500);
   }
+
+  console.log(`Claude extracted ${extractedItems.length} items`);
 
   // ── Create photo record ───────────────────────────────────────────────────
   const deleteAfter = new Date();
@@ -343,54 +401,78 @@ Deno.serve(async (req) => {
     .select("id")
     .single();
 
-  if (photoError) console.error("Photo insert error:", JSON.stringify(photoError));
+  if (photoError) {
+    // Non-fatal — we still write events, just without a photo FK
+    warnings.push(`Photo record creation failed: ${photoError.message}`);
+    console.error("Photo insert error:", JSON.stringify(photoError));
+  }
 
   if (resolvedBoardId) {
-    await supabase
+    const { error: boardUpdateError } = await supabase
       .from("boards")
       .update({
         last_sighted_at: new Date().toISOString(),
         current_state_photo_id: photoRecord?.id,
       })
       .eq("id", resolvedBoardId);
+
+    if (boardUpdateError) {
+      warnings.push(`Board timestamp update failed: ${boardUpdateError.message}`);
+      console.error("Board update error:", JSON.stringify(boardUpdateError));
+    }
   }
 
   // ── Write extracted items to DB ───────────────────────────────────────────
   const results: { event_id: string; name: string }[] = [];
+  const skipped: { name: string; reason: string }[] = [];
   const seenEventIds = new Set<string>();
 
   for (const item of extractedItems) {
+    if (!item.name) {
+      skipped.push({ name: "(unnamed)", reason: "Missing name field" });
+      continue;
+    }
+
     let eventId: string | null = null;
 
     // Simple dedup: URL hard match
     if (item.event_url) {
-      const { data: existing } = await supabase
+      const { data: existing, error: dedupError } = await supabase
         .from("events")
         .select("id")
         .eq("event_url", item.event_url)
         .eq("is_active", true)
         .maybeSingle();
-      if (existing) eventId = existing.id;
+
+      if (dedupError) {
+        warnings.push(`Dedup check failed for "${item.name}": ${dedupError.message}`);
+        console.error("Dedup error:", JSON.stringify(dedupError));
+      } else if (existing) {
+        eventId = existing.id;
+      }
     }
 
     // Organization lookup / create
     let organizationId: string | null = null;
     if (item.organization) {
       const canonical = item.organization.toLowerCase().trim();
-      const { data: existingOrg } = await supabase
+      const { data: existingOrg, error: orgLookupError } = await supabase
         .from("organizations")
         .select("id")
         .eq("canonical_name", canonical)
         .maybeSingle();
 
-      if (existingOrg) {
+      if (orgLookupError) {
+        warnings.push(`Org lookup failed for "${item.organization}": ${orgLookupError.message}`);
+        console.error("Org lookup error:", JSON.stringify(orgLookupError));
+      } else if (existingOrg) {
         organizationId = existingOrg.id;
         await supabase
           .from("organizations")
           .update({ last_active_at: new Date().toISOString() })
           .eq("id", organizationId);
       } else {
-        const { data: newOrg } = await supabase
+        const { data: newOrg, error: orgInsertError } = await supabase
           .from("organizations")
           .insert({
             name: item.organization,
@@ -399,13 +481,19 @@ Deno.serve(async (req) => {
           })
           .select("id")
           .single();
-        organizationId = newOrg?.id ?? null;
+
+        if (orgInsertError) {
+          warnings.push(`Org creation failed for "${item.organization}": ${orgInsertError.message}`);
+          console.error("Org insert error:", JSON.stringify(orgInsertError));
+        } else {
+          organizationId = newOrg?.id ?? null;
+        }
       }
     }
 
     // Create or update event
     if (!eventId) {
-      const { data: newEvent, error: insertEventError } = await supabase
+      const { data: newEvent, error: eventInsertError } = await supabase
         .from("events")
         .insert({
           name: item.name,
@@ -440,17 +528,27 @@ Deno.serve(async (req) => {
         .select("id")
         .single();
 
-      if (insertEventError) console.error("Event insert error:", JSON.stringify(insertEventError));
+      if (eventInsertError) {
+        skipped.push({ name: item.name, reason: `Event insert failed: ${eventInsertError.message}` });
+        console.error(`Event insert error for "${item.name}":`, JSON.stringify(eventInsertError));
+        continue;
+      }
+
       eventId = newEvent?.id ?? null;
     } else {
-      // Merge: scalar last-write-wins (non-null only), arrays union
-      const { data: existing } = await supabase
+      // Existing event — merge non-null scalars, union arrays
+      const { data: existing, error: fetchExistingError } = await supabase
         .from("events")
         .select("tags, accessibility")
         .eq("id", eventId)
         .single();
 
-      await supabase
+      if (fetchExistingError) {
+        warnings.push(`Could not fetch existing event data for merge (id: ${eventId}): ${fetchExistingError.message}`);
+        console.error("Existing event fetch error:", JSON.stringify(fetchExistingError));
+      }
+
+      const { error: updateError } = await supabase
         .from("events")
         .update({
           last_sighted_at: new Date().toISOString(),
@@ -472,13 +570,22 @@ Deno.serve(async (req) => {
           ...(item.flyer_style && { flyer_style: item.flyer_style }),
         })
         .eq("id", eventId);
+
+      if (updateError) {
+        warnings.push(`Event merge failed for "${item.name}" (id: ${eventId}): ${updateError.message}`);
+        console.error("Event update error:", JSON.stringify(updateError));
+      }
     }
 
-    if (!eventId) continue;
+    if (!eventId) {
+      skipped.push({ name: item.name, reason: "No event ID after insert" });
+      continue;
+    }
+
     seenEventIds.add(eventId);
 
     // Sighting
-    await supabase.from("event_sightings").insert({
+    const { error: sightingError } = await supabase.from("event_sightings").insert({
       event_id: eventId,
       photo_id: photoRecord?.id ?? null,
       board_id: resolvedBoardId,
@@ -487,9 +594,14 @@ Deno.serve(async (req) => {
       flyer_style: item.flyer_style ?? null,
     });
 
+    if (sightingError) {
+      warnings.push(`Sighting insert failed for "${item.name}": ${sightingError.message}`);
+      console.error("Sighting insert error:", JSON.stringify(sightingError));
+    }
+
     // Board flyer upsert
     if (resolvedBoardId) {
-      await supabase.from("board_flyers").upsert(
+      const { error: flyerError } = await supabase.from("board_flyers").upsert(
         {
           board_id: resolvedBoardId,
           event_id: eventId,
@@ -499,6 +611,11 @@ Deno.serve(async (req) => {
         },
         { onConflict: "board_id,event_id" },
       );
+
+      if (flyerError) {
+        warnings.push(`Board flyer upsert failed for "${item.name}": ${flyerError.message}`);
+        console.error("Board flyer upsert error:", JSON.stringify(flyerError));
+      }
     }
 
     // Talent
@@ -506,11 +623,17 @@ Deno.serve(async (req) => {
       if (!t.name) continue;
       const canonical = t.name.toLowerCase().trim();
 
-      const { data: existingTalent } = await supabase
+      const { data: existingTalent, error: talentLookupError } = await supabase
         .from("talent")
         .select("id")
         .eq("canonical_name", canonical)
         .maybeSingle();
+
+      if (talentLookupError) {
+        warnings.push(`Talent lookup failed for "${t.name}": ${talentLookupError.message}`);
+        console.error("Talent lookup error:", JSON.stringify(talentLookupError));
+        continue;
+      }
 
       let talentId: string | null = null;
       if (existingTalent) {
@@ -520,7 +643,7 @@ Deno.serve(async (req) => {
           .update({ last_active_at: new Date().toISOString() })
           .eq("id", talentId);
       } else {
-        const { data: newTalent } = await supabase
+        const { data: newTalent, error: talentInsertError } = await supabase
           .from("talent")
           .insert({
             name: t.name,
@@ -529,11 +652,18 @@ Deno.serve(async (req) => {
           })
           .select("id")
           .single();
+
+        if (talentInsertError) {
+          warnings.push(`Talent creation failed for "${t.name}": ${talentInsertError.message}`);
+          console.error("Talent insert error:", JSON.stringify(talentInsertError));
+          continue;
+        }
+
         talentId = newTalent?.id ?? null;
       }
 
       if (talentId) {
-        await supabase.from("event_talent").upsert(
+        const { error: linkError } = await supabase.from("event_talent").upsert(
           {
             event_id: eventId,
             talent_id: talentId,
@@ -542,6 +672,11 @@ Deno.serve(async (req) => {
           },
           { onConflict: "event_id,talent_id" },
         );
+
+        if (linkError) {
+          warnings.push(`event_talent link failed for "${t.name}" on "${item.name}": ${linkError.message}`);
+          console.error("event_talent upsert error:", JSON.stringify(linkError));
+        }
       }
     }
 
@@ -550,31 +685,49 @@ Deno.serve(async (req) => {
 
   // ── Mark removed flyers ───────────────────────────────────────────────────
   if (resolvedBoardId && seenEventIds.size > 0) {
-    const { data: activeFlyers } = await supabase
+    const { data: activeFlyers, error: activeFlyersError } = await supabase
       .from("board_flyers")
       .select("event_id")
       .eq("board_id", resolvedBoardId)
       .eq("is_active", true);
 
-    const removedIds = (activeFlyers ?? [])
-      .map((f: any) => f.event_id)
-      .filter((id: string) => !seenEventIds.has(id));
+    if (activeFlyersError) {
+      warnings.push(`Could not fetch active flyers for removal check: ${activeFlyersError.message}`);
+      console.error("Active flyers fetch error:", JSON.stringify(activeFlyersError));
+    } else {
+      const removedIds = (activeFlyers ?? [])
+        .map((f: any) => f.event_id)
+        .filter((id: string) => !seenEventIds.has(id));
 
-    if (removedIds.length > 0) {
-      await supabase
-        .from("board_flyers")
-        .update({ is_active: false, removed_at: new Date().toISOString() })
-        .eq("board_id", resolvedBoardId)
-        .in("event_id", removedIds);
+      if (removedIds.length > 0) {
+        const { error: removalError } = await supabase
+          .from("board_flyers")
+          .update({ is_active: false, removed_at: new Date().toISOString() })
+          .eq("board_id", resolvedBoardId)
+          .in("event_id", removedIds);
+
+        if (removalError) {
+          warnings.push(`Flyer removal update failed for ${removedIds.length} flyers: ${removalError.message}`);
+          console.error("Flyer removal error:", JSON.stringify(removalError));
+        } else {
+          console.log(`Marked ${removedIds.length} flyers as removed`);
+        }
+      }
     }
   }
 
   // ── Done ──────────────────────────────────────────────────────────────────
-  return respond({
+  const response: any = {
     success: true,
-    photo_id: photoRecord?.id,
+    photo_id: photoRecord?.id ?? null,
     board_id: resolvedBoardId,
     events_extracted: results.length,
+    events_skipped: skipped.length,
     events: results,
-  });
+  };
+
+  if (skipped.length > 0) response.skipped = skipped;
+  if (warnings.length > 0) response.warnings = warnings;
+
+  return respond(response);
 });
