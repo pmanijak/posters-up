@@ -2,8 +2,9 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import exifr from 'exifr'
 
-async function resizeImage(file: File, maxDimension = 1600): Promise<Blob> {
+async function resizeImage(file: File, maxDimension = 2400): Promise<Blob> {
   const bitmap = await createImageBitmap(file)
   const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height))
   const canvas = document.createElement('canvas')
@@ -43,13 +44,29 @@ export default function Home() {
     const file = e.target.files?.[0]
     if (!file || !user) return
 
-    const resized = await resizeImage(file)
-
     setUploading(true)
     setError(null)
     setResults(null)
 
     try {
+      // Read EXIF from the original file before resizing —
+      // canvas strips EXIF so this must happen first.
+      const [gps, exifData] = await Promise.all([
+        exifr.gps(file).catch(() => null),
+        exifr.parse(file, ['DateTimeOriginal']).catch(() => null),
+      ])
+
+      const lat = gps?.latitude ?? null
+      const lng = gps?.longitude ?? null
+      const capture_date = exifData?.DateTimeOriginal
+        ? new Date(exifData.DateTimeOriginal).toISOString().split('T')[0]
+        : null
+
+      console.log('EXIF GPS:', lat, lng, '| Date:', capture_date)
+
+      // Resize after reading EXIF
+      const resized = await resizeImage(file)
+
       // Upload to storage
       const path = `${user.id}/${Date.now()}-${file.name}`
       const { error: uploadError } = await supabase.storage
@@ -70,7 +87,7 @@ export default function Home() {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${session?.access_token}`
           },
-          body: JSON.stringify({ photo_path: path })
+          body: JSON.stringify({ photo_path: path, lat, lng, capture_date })
         }
       )
 
@@ -136,6 +153,17 @@ export default function Home() {
       {results && (
         <div className="space-y-2">
           <p className="font-medium">{results.events_extracted} events extracted</p>
+          {results.board_id
+            ? <p className="text-sm text-gray-500">Board: {results.board_id}</p>
+            : <p className="text-sm text-amber-500">No board linked — GPS may be missing</p>
+          }
+          {results.warnings?.length > 0 && (
+            <div className="text-sm text-amber-600 space-y-1">
+              {results.warnings.map((w: string, i: number) => (
+                <p key={i}>⚠ {w}</p>
+              ))}
+            </div>
+          )}
           <pre className="rounded p-4 text-xs overflow-auto">
             {JSON.stringify(results, null, 2)}
           </pre>
