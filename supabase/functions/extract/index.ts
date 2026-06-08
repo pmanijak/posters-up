@@ -1,8 +1,8 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')!
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const SYSTEM_PROMPT = `You are an event extraction system for a community bulletin board app.
 Analyze photos of physical bulletin boards and extract structured data
@@ -138,244 +138,283 @@ OUTPUT FORMAT — return a JSON array of objects with these fields:
   "rsvp_url": "URL or null",
   "confidence": 0.0,
   "confidence_note": "explanation if confidence below 0.80, else null"
-}`
+}`;
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
+};
+
+// Always returns a properly-formed Response with CORS headers.
+// status must be a plain number — never pass an object here.
+function respond(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
 
 Deno.serve(async (req) => {
-  if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 })
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  if (req.method !== "POST") {
+    return respond({ error: "Method not allowed" }, 405);
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  const authHeader = req.headers.get('Authorization')
-  if (!authHeader) return new Response('Unauthorized', { status: 401 })
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader) return respond({ error: "Unauthorized" }, 401);
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-  const token = authHeader.replace('Bearer ', '')
-  const { data: { user }, error: authError } = await supabase.auth.getUser(token)
-  if (authError || !user) return new Response('Unauthorized', { status: 401 })
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const token = authHeader.replace("Bearer ", "");
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser(token);
+  if (authError || !user) return respond({ error: "Unauthorized" }, 401);
 
   // ── Parse request ─────────────────────────────────────────────────────────
-  const { photo_path, lat, lng, capture_date, board_id } = await req.json()
+  const { photo_path, lat, lng, capture_date, board_id } = await req.json();
   if (!photo_path) {
-    return new Response(JSON.stringify({ error: 'photo_path required' }), { status: 400 })
+    return respond({ error: "photo_path required" }, 400);
   }
 
   // ── Rate limiting ─────────────────────────────────────────────────────────
-  const today = new Date().toISOString().split('T')[0]
+  const today = new Date().toISOString().split("T")[0];
   const { count } = await supabase
-    .from('photos')
-    .select('*', { count: 'exact', head: true })
-    .eq('submitted_by', user.id)
-    .gte('submitted_at', `${today}T00:00:00Z`)
+    .from("photos")
+    .select("*", { count: "exact", head: true })
+    .eq("submitted_by", user.id)
+    .gte("submitted_at", `${today}T00:00:00Z`);
 
   const { data: limitConfig } = await supabase
-    .from('config')
-    .select('value')
-    .eq('key', 'max_daily_submissions_per_user')
-    .single()
+    .from("config")
+    .select("value")
+    .eq("key", "max_daily_submissions_per_user")
+    .single();
 
-  const maxSubmissions = parseInt(limitConfig?.value ?? '20')
+  const maxSubmissions = parseInt(limitConfig?.value ?? "20");
   if ((count ?? 0) >= maxSubmissions) {
-    return new Response(
-      JSON.stringify({ error: 'Daily submission limit reached' }),
-      { status: 429, headers: { 'Content-Type': 'application/json' } }
-    )
+    return respond({ error: "Daily submission limit reached" }, 429);
   }
 
   // ── Download photo ────────────────────────────────────────────────────────
   const { data: photoBlob, error: downloadError } = await supabase.storage
-    .from('photos-raw')
-    .download(photo_path)
+    .from("photos-raw")
+    .download(photo_path);
 
   if (downloadError || !photoBlob) {
-    return new Response(JSON.stringify({ error: 'Photo not found' }), { status: 404 })
+    return respond({ error: "Photo not found" }, 404);
   }
 
-  const arrayBuffer = await photoBlob.arrayBuffer()
-  const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)))
-  const mimeType = photoBlob.type || 'image/jpeg'
+  const arrayBuffer = await photoBlob.arrayBuffer();
+  const uint8Array = new Uint8Array(arrayBuffer);
+  let base64 = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < uint8Array.length; i += chunkSize) {
+    base64 += String.fromCharCode(...uint8Array.subarray(i, i + chunkSize));
+  }
+  base64 = btoa(base64);
+  const mimeType = photoBlob.type || "image/jpeg";
 
   // ── Resolve board ─────────────────────────────────────────────────────────
-  let resolvedBoardId = board_id ?? null
+  let resolvedBoardId = board_id ?? null;
 
   if (!resolvedBoardId && lat && lng) {
-    // Look for an existing board within 20 metres
-    const { data: nearby } = await supabase.rpc('find_nearby_board', {
-      p_lat: lat, p_lng: lng, p_radius_meters: 20
-    })
+    const { data: nearby } = await supabase.rpc("find_nearby_board", {
+      p_lat: lat,
+      p_lng: lng,
+      p_radius_meters: 20,
+    });
 
     if (nearby?.id) {
-      resolvedBoardId = nearby.id
+      resolvedBoardId = nearby.id;
     } else {
       const { data: newBoard } = await supabase
-        .from('boards')
+        .from("boards")
         .insert({ geolocation: `POINT(${lng} ${lat})` })
-        .select('id')
-        .single()
-      resolvedBoardId = newBoard?.id ?? null
+        .select("id")
+        .single();
+      resolvedBoardId = newBoard?.id ?? null;
     }
   }
 
   // ── Board context ─────────────────────────────────────────────────────────
-  let boardDescription: string | null = null
-  let knownEvents: { name: string; date_start: string | null }[] | null = null
+  let boardDescription: string | null = null;
+  let knownEvents: { name: string; date_start: string | null }[] | null = null;
 
   if (resolvedBoardId) {
     const { data: board } = await supabase
-      .from('boards')
-      .select('description')
-      .eq('id', resolvedBoardId)
-      .single()
-    boardDescription = board?.description ?? null
+      .from("boards")
+      .select("description")
+      .eq("id", resolvedBoardId)
+      .single();
+    boardDescription = board?.description ?? null;
 
     const { data: flyers } = await supabase
-      .from('board_flyers')
-      .select('events(name, date_start)')
-      .eq('board_id', resolvedBoardId)
-      .eq('is_active', true)
-      .order('last_seen_at', { ascending: false })
-      .limit(10)
+      .from("board_flyers")
+      .select("events(name, date_start)")
+      .eq("board_id", resolvedBoardId)
+      .eq("is_active", true)
+      .order("last_seen_at", { ascending: false })
+      .limit(10);
 
     if (flyers?.length) {
       knownEvents = flyers
-        .map((f: any) => ({ name: f.events?.name, date_start: f.events?.date_start }))
-        .filter((e: any) => e.name)
+        .map((f: any) => ({
+          name: f.events?.name,
+          date_start: f.events?.date_start,
+        }))
+        .filter((e: any) => e.name);
     }
   }
 
   // ── Call Claude ───────────────────────────────────────────────────────────
   const userMessage = [
-    `Photo taken: ${capture_date ?? new Date().toISOString().split('T')[0]}`,
-    `Board location: ${boardDescription ?? 'unknown'}`,
-    `Known events on this board as of last photo: ${knownEvents ? JSON.stringify(knownEvents) : 'none'}`,
-    '',
-    'Extract all items from this bulletin board photo.'
-  ].join('\n')
+    `Photo taken: ${capture_date ?? new Date().toISOString().split("T")[0]}`,
+    `Board location: ${boardDescription ?? "unknown"}`,
+    `Known events on this board as of last photo: ${knownEvents ? JSON.stringify(knownEvents) : "none"}`,
+    "",
+    "Extract all items from this bulletin board photo.",
+  ].join("\n");
 
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
+  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01'
+      "Content-Type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
+      model: "claude-sonnet-4-6",
+      max_tokens: 16000,
       system: SYSTEM_PROMPT,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
-          { type: 'text', text: userMessage }
-        ]
-      }]
-    })
-  })
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: mimeType, data: base64 },
+            },
+            { type: "text", text: userMessage },
+          ],
+        },
+      ],
+    }),
+  });
 
   if (!claudeRes.ok) {
-    const err = await claudeRes.text()
-    return new Response(JSON.stringify({ error: 'Claude API error', detail: err }), { status: 502 })
+    const err = await claudeRes.text();
+    console.error("Claude API error:", claudeRes.status, err);
+    return respond({ error: "Claude API error", detail: err }, 502);
   }
 
-  const claudeData = await claudeRes.json()
-  const rawText = claudeData.content?.[0]?.text ?? ''
+  const claudeData = await claudeRes.json();
+  const rawText = claudeData.content?.[0]?.text ?? "";
 
-  let extractedItems: any[]
+  let extractedItems: any[];
   try {
-    extractedItems = JSON.parse(rawText)
-    if (!Array.isArray(extractedItems)) throw new Error('Expected array')
+    extractedItems = JSON.parse(rawText);
+    if (!Array.isArray(extractedItems)) throw new Error("Expected array");
   } catch {
-    return new Response(
-      JSON.stringify({ error: 'Failed to parse extraction response', raw: rawText }),
-      { status: 500 }
-    )
+    console.error("Parse failed. Raw text:", rawText.slice(0, 500));
+    return respond({ error: "Failed to parse extraction response" }, 500);
   }
 
   // ── Create photo record ───────────────────────────────────────────────────
-  const deleteAfter = new Date()
-  deleteAfter.setDate(deleteAfter.getDate() + 90)
+  const deleteAfter = new Date();
+  deleteAfter.setDate(deleteAfter.getDate() + 90);
 
-  const { data: photoRecord } = await supabase
-    .from('photos')
+  const { data: photoRecord, error: photoError } = await supabase
+    .from("photos")
     .insert({
       board_id: resolvedBoardId,
       submitted_by: user.id,
       image_url: photo_path,
       delete_after: deleteAfter.toISOString(),
-      extraction_status: 'complete',
-      extracted_at: new Date().toISOString()
+      extraction_status: "complete",
+      extracted_at: new Date().toISOString(),
     })
-    .select('id')
-    .single()
+    .select("id")
+    .single();
 
-  // Update board timestamps
+  if (photoError)
+    console.error("Photo insert error:", JSON.stringify(photoError));
+
   if (resolvedBoardId) {
     await supabase
-      .from('boards')
+      .from("boards")
       .update({
         last_sighted_at: new Date().toISOString(),
-        current_state_photo_id: photoRecord?.id
+        current_state_photo_id: photoRecord?.id,
       })
-      .eq('id', resolvedBoardId)
+      .eq("id", resolvedBoardId);
   }
 
   // ── Write extracted items to DB ───────────────────────────────────────────
-  const results: { event_id: string; name: string }[] = []
-  const seenEventIds = new Set<string>()
+  const results: { event_id: string; name: string }[] = [];
+  const seenEventIds = new Set<string>();
 
   for (const item of extractedItems) {
-    // Simple dedup: URL hard match
-    let eventId: string | null = null
+    let eventId: string | null = null;
 
+    // Simple dedup: URL hard match
     if (item.event_url) {
       const { data: existing } = await supabase
-        .from('events')
-        .select('id')
-        .eq('event_url', item.event_url)
-        .eq('is_active', true)
-        .maybeSingle()
-      if (existing) eventId = existing.id
+        .from("events")
+        .select("id")
+        .eq("event_url", item.event_url)
+        .eq("is_active", true)
+        .maybeSingle();
+      if (existing) eventId = existing.id;
     }
 
     // Organization lookup / create
-    let organizationId: string | null = null
+    let organizationId: string | null = null;
     if (item.organization) {
-      const canonical = item.organization.toLowerCase().trim()
+      const canonical = item.organization.toLowerCase().trim();
       const { data: existingOrg } = await supabase
-        .from('organizations')
-        .select('id')
-        .eq('canonical_name', canonical)
-        .maybeSingle()
+        .from("organizations")
+        .select("id")
+        .eq("canonical_name", canonical)
+        .maybeSingle();
 
       if (existingOrg) {
-        organizationId = existingOrg.id
+        organizationId = existingOrg.id;
         await supabase
-          .from('organizations')
+          .from("organizations")
           .update({ last_active_at: new Date().toISOString() })
-          .eq('id', organizationId)
+          .eq("id", organizationId);
       } else {
         const { data: newOrg } = await supabase
-          .from('organizations')
-          .insert({ name: item.organization, canonical_name: canonical, last_active_at: new Date().toISOString() })
-          .select('id')
-          .single()
-        organizationId = newOrg?.id ?? null
+          .from("organizations")
+          .insert({
+            name: item.organization,
+            canonical_name: canonical,
+            last_active_at: new Date().toISOString(),
+          })
+          .select("id")
+          .single();
+        organizationId = newOrg?.id ?? null;
       }
     }
 
     // Create or update event
     if (!eventId) {
-      const { data: newEvent } = await supabase
-        .from('events')
+      const { data: newEvent, error: insertEventError } = await supabase
+        .from("events")
         .insert({
           name: item.name,
           organization_id: organizationId,
-          content_type: item.content_type ?? 'event',
+          content_type: item.content_type ?? "event",
           event_category: item.event_category ?? null,
           tags: item.tags ?? [],
           flyer_style: item.flyer_style ?? null,
-          date_type: item.date_type ?? 'unknown',
+          date_type: item.date_type ?? "unknown",
           date_start: item.date_start ?? null,
           date_end: item.date_end ?? null,
           time_start: item.time_start ?? null,
@@ -398,125 +437,147 @@ Deno.serve(async (req) => {
           rsvp_required: item.rsvp_required ?? null,
           rsvp_url: item.rsvp_url ?? null,
         })
-        .select('id')
-        .single()
-      eventId = newEvent?.id ?? null
+        .select("id")
+        .single();
+
+      if (insertEventError)
+        console.error("Event insert error:", JSON.stringify(insertEventError));
+      eventId = newEvent?.id ?? null;
     } else {
       // Merge: scalar last-write-wins (non-null only), arrays union
       const { data: existing } = await supabase
-        .from('events')
-        .select('tags, accessibility')
-        .eq('id', eventId)
-        .single()
+        .from("events")
+        .select("tags, accessibility")
+        .eq("id", eventId)
+        .single();
 
-      const mergedTags = [...new Set([...(existing?.tags ?? []), ...(item.tags ?? [])])]
-      const mergedAccessibility = [...new Set([...(existing?.accessibility ?? []), ...(item.accessibility ?? [])])]
-
-      await supabase.from('events').update({
-        last_sighted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        tags: mergedTags,
-        accessibility: mergedAccessibility,
-        ...(item.event_category    && { event_category: item.event_category }),
-        ...(item.age_restriction   && { age_restriction: item.age_restriction }),
-        ...(item.language          && { language: item.language }),
-        ...(item.is_outdoor        != null && { is_outdoor: item.is_outdoor }),
-        ...(item.masks_required    && { masks_required: item.masks_required }),
-        ...(item.price_raw         && { price_raw: item.price_raw }),
-        ...(item.event_url         && { event_url: item.event_url }),
-        ...(item.flyer_style       && { flyer_style: item.flyer_style }),
-      }).eq('id', eventId)
+      await supabase
+        .from("events")
+        .update({
+          last_sighted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          tags: [...new Set([...(existing?.tags ?? []), ...(item.tags ?? [])])],
+          accessibility: [
+            ...new Set([
+              ...(existing?.accessibility ?? []),
+              ...(item.accessibility ?? []),
+            ]),
+          ],
+          ...(item.event_category && { event_category: item.event_category }),
+          ...(item.age_restriction && {
+            age_restriction: item.age_restriction,
+          }),
+          ...(item.language && { language: item.language }),
+          ...(item.is_outdoor != null && { is_outdoor: item.is_outdoor }),
+          ...(item.masks_required && { masks_required: item.masks_required }),
+          ...(item.price_raw && { price_raw: item.price_raw }),
+          ...(item.event_url && { event_url: item.event_url }),
+          ...(item.flyer_style && { flyer_style: item.flyer_style }),
+        })
+        .eq("id", eventId);
     }
 
-    if (!eventId) continue
-    seenEventIds.add(eventId)
+    if (!eventId) continue;
+    seenEventIds.add(eventId);
 
     // Sighting
-    await supabase.from('event_sightings').insert({
+    await supabase.from("event_sightings").insert({
       event_id: eventId,
       photo_id: photoRecord?.id ?? null,
       board_id: resolvedBoardId,
       raw_extraction: item,
       extraction_confidence: item.confidence ?? 0.5,
-      flyer_style: item.flyer_style ?? null
-    })
+      flyer_style: item.flyer_style ?? null,
+    });
 
-    // Board flyer (upsert)
+    // Board flyer upsert
     if (resolvedBoardId) {
-      await supabase.from('board_flyers').upsert({
-        board_id: resolvedBoardId,
-        event_id: eventId,
-        last_seen_at: new Date().toISOString(),
-        is_active: true,
-        removed_at: null
-      }, { onConflict: 'board_id,event_id' })
+      await supabase.from("board_flyers").upsert(
+        {
+          board_id: resolvedBoardId,
+          event_id: eventId,
+          last_seen_at: new Date().toISOString(),
+          is_active: true,
+          removed_at: null,
+        },
+        { onConflict: "board_id,event_id" },
+      );
     }
 
     // Talent
     for (const t of item.talent ?? []) {
-      if (!t.name) continue
-      const canonical = t.name.toLowerCase().trim()
+      if (!t.name) continue;
+      const canonical = t.name.toLowerCase().trim();
 
       const { data: existingTalent } = await supabase
-        .from('talent')
-        .select('id')
-        .eq('canonical_name', canonical)
-        .maybeSingle()
+        .from("talent")
+        .select("id")
+        .eq("canonical_name", canonical)
+        .maybeSingle();
 
-      let talentId: string | null = null
+      let talentId: string | null = null;
       if (existingTalent) {
-        talentId = existingTalent.id
-        await supabase.from('talent').update({ last_active_at: new Date().toISOString() }).eq('id', talentId)
+        talentId = existingTalent.id;
+        await supabase
+          .from("talent")
+          .update({ last_active_at: new Date().toISOString() })
+          .eq("id", talentId);
       } else {
         const { data: newTalent } = await supabase
-          .from('talent')
-          .insert({ name: t.name, canonical_name: canonical, last_active_at: new Date().toISOString() })
-          .select('id')
-          .single()
-        talentId = newTalent?.id ?? null
+          .from("talent")
+          .insert({
+            name: t.name,
+            canonical_name: canonical,
+            last_active_at: new Date().toISOString(),
+          })
+          .select("id")
+          .single();
+        talentId = newTalent?.id ?? null;
       }
 
       if (talentId) {
-        await supabase.from('event_talent').upsert({
-          event_id: eventId,
-          talent_id: talentId,
-          role: t.role ?? null,
-          billing_position: t.billing_position ?? null
-        }, { onConflict: 'event_id,talent_id' })
+        await supabase.from("event_talent").upsert(
+          {
+            event_id: eventId,
+            talent_id: talentId,
+            role: t.role ?? null,
+            billing_position: t.billing_position ?? null,
+          },
+          { onConflict: "event_id,talent_id" },
+        );
       }
     }
 
-    results.push({ event_id: eventId, name: item.name })
+    results.push({ event_id: eventId, name: item.name });
   }
 
   // ── Mark removed flyers ───────────────────────────────────────────────────
-  // Any previously active flyer on this board not seen in this extraction
-  // is presumed removed.
   if (resolvedBoardId && seenEventIds.size > 0) {
     const { data: activeFlyers } = await supabase
-      .from('board_flyers')
-      .select('event_id')
-      .eq('board_id', resolvedBoardId)
-      .eq('is_active', true)
+      .from("board_flyers")
+      .select("event_id")
+      .eq("board_id", resolvedBoardId)
+      .eq("is_active", true);
 
     const removedIds = (activeFlyers ?? [])
       .map((f: any) => f.event_id)
-      .filter((id: string) => !seenEventIds.has(id))
+      .filter((id: string) => !seenEventIds.has(id));
 
     if (removedIds.length > 0) {
-      await supabase.from('board_flyers')
+      await supabase
+        .from("board_flyers")
         .update({ is_active: false, removed_at: new Date().toISOString() })
-        .eq('board_id', resolvedBoardId)
-        .in('event_id', removedIds)
+        .eq("board_id", resolvedBoardId)
+        .in("event_id", removedIds);
     }
   }
 
   // ── Done ──────────────────────────────────────────────────────────────────
-  return new Response(JSON.stringify({
+  return respond({
     success: true,
     photo_id: photoRecord?.id,
     board_id: resolvedBoardId,
     events_extracted: results.length,
-    events: results
-  }), { headers: { 'Content-Type': 'application/json' } })
-})
+    events: results,
+  });
+});
