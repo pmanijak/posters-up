@@ -146,8 +146,6 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-// Always returns a properly-formed Response with CORS headers.
-// status must be a plain number — never pass an object here.
 function respond(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -230,17 +228,20 @@ Deno.serve(async (req) => {
       p_radius_meters: 20,
     });
 
-    if (nearby?.id) {
-      resolvedBoardId = nearby.id;
+    if (nearby && nearby.length > 0) {
+      resolvedBoardId = nearby[0].id;
     } else {
-      const { data: newBoard } = await supabase
+      const { data: newBoard, error: boardError } = await supabase
         .from("boards")
-        .insert({ geolocation: `POINT(${lng} ${lat})` })
+        .insert({ geolocation: `SRID=4326;POINT(${lng} ${lat})` })
         .select("id")
         .single();
+      if (boardError) console.error("Board insert failed:", JSON.stringify(boardError));
       resolvedBoardId = newBoard?.id ?? null;
     }
   }
+
+  console.log("Resolved board_id:", resolvedBoardId, "lat:", lat, "lng:", lng);
 
   // ── Board context ─────────────────────────────────────────────────────────
   let boardDescription: string | null = null;
@@ -342,8 +343,7 @@ Deno.serve(async (req) => {
     .select("id")
     .single();
 
-  if (photoError)
-    console.error("Photo insert error:", JSON.stringify(photoError));
+  if (photoError) console.error("Photo insert error:", JSON.stringify(photoError));
 
   if (resolvedBoardId) {
     await supabase
@@ -440,8 +440,7 @@ Deno.serve(async (req) => {
         .select("id")
         .single();
 
-      if (insertEventError)
-        console.error("Event insert error:", JSON.stringify(insertEventError));
+      if (insertEventError) console.error("Event insert error:", JSON.stringify(insertEventError));
       eventId = newEvent?.id ?? null;
     } else {
       // Merge: scalar last-write-wins (non-null only), arrays union
@@ -464,9 +463,7 @@ Deno.serve(async (req) => {
             ]),
           ],
           ...(item.event_category && { event_category: item.event_category }),
-          ...(item.age_restriction && {
-            age_restriction: item.age_restriction,
-          }),
+          ...(item.age_restriction && { age_restriction: item.age_restriction }),
           ...(item.language && { language: item.language }),
           ...(item.is_outdoor != null && { is_outdoor: item.is_outdoor }),
           ...(item.masks_required && { masks_required: item.masks_required }),
