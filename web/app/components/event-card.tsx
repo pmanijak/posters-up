@@ -256,7 +256,7 @@ export function EventCard({ event }: { event: Event }) {
           {/* Link */}
           {event.event_url && (
             <a
-              href={event.event_url}
+              href={event.event_url.startsWith('http') ? event.event_url : `https://${event.event_url}`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs"
