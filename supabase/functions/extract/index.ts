@@ -423,7 +423,7 @@ Deno.serve(async (req) => {
   }
 
   // ── Write extracted items to DB ───────────────────────────────────────────
-  const results: { event_id: string; name: string }[] = [];
+  const results: { event_id: string; name: string; match_type?: string }[] = [];
   const skipped: { name: string; reason: string }[] = [];
   const seenEventIds = new Set<string>();
 
@@ -434,25 +434,31 @@ Deno.serve(async (req) => {
     }
 
     let eventId: string | null = null;
+    let matchType: string = "none";
 
-    // Simple dedup: URL hard match
-    if (item.event_url) {
-      const { data: existing, error: dedupError } = await supabase
-        .from("events")
-        .select("id")
-        .eq("event_url", item.event_url)
-        .eq("is_active", true)
-        .maybeSingle();
+    // ── Event matching ────────────────────────────────────────────────────
+    // find_event_match() checks URL (hard match) then fuzzy name+date+location.
+    // A match means this is an additional sighting of an existing event —
+    // we link the sighting to it rather than creating a duplicate record.
+    // Confidence recomputes automatically via trigger on event_sightings.
+    const { data: match, error: matchError } = await supabase.rpc("find_event_match", {
+      p_name:          item.name,
+      p_date_start:    item.date_start ?? null,
+      p_location_name: item.location_name ?? null,
+      p_board_lat:     lat ?? null,
+      p_board_lng:     lng ?? null,
+      p_event_url:     item.event_url ?? null,
+    });
 
-      if (dedupError) {
-        warnings.push(`Dedup check failed for "${item.name}": ${dedupError.message}`);
-        console.error("Dedup error:", JSON.stringify(dedupError));
-      } else if (existing) {
-        eventId = existing.id;
-      }
+    if (matchError) {
+      warnings.push(`Event match check failed for "${item.name}": ${matchError.message}`);
+      console.error("find_event_match error:", JSON.stringify(matchError));
+    } else if (match?.match_id) {
+      eventId = match.match_id;
+      matchType = match.match_type;
     }
 
-    // Organization lookup / create
+    // ── Organization lookup / create ──────────────────────────────────────
     let organizationId: string | null = null;
     if (item.organization) {
       const canonical = item.organization.toLowerCase().trim();
@@ -491,8 +497,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Create or update event
+    // ── Create or update event ────────────────────────────────────────────
     if (!eventId) {
+      // No match — create a new event record
       const { data: newEvent, error: eventInsertError } = await supabase
         .from("events")
         .insert({
@@ -536,7 +543,9 @@ Deno.serve(async (req) => {
 
       eventId = newEvent?.id ?? null;
     } else {
-      // Existing event — merge non-null scalars, union arrays
+      // Existing event — this extraction is a new sighting.
+      // Merge in any new information: union arrays, fill sparse scalar
+      // fields, bump timestamps. Never overwrite with null.
       const { data: existing, error: fetchExistingError } = await supabase
         .from("events")
         .select("tags, accessibility")
@@ -560,14 +569,14 @@ Deno.serve(async (req) => {
               ...(item.accessibility ?? []),
             ]),
           ],
-          ...(item.event_category && { event_category: item.event_category }),
+          ...(item.event_category  && { event_category:  item.event_category }),
           ...(item.age_restriction && { age_restriction: item.age_restriction }),
-          ...(item.language && { language: item.language }),
-          ...(item.is_outdoor != null && { is_outdoor: item.is_outdoor }),
-          ...(item.masks_required && { masks_required: item.masks_required }),
-          ...(item.price_raw && { price_raw: item.price_raw }),
-          ...(item.event_url && { event_url: item.event_url }),
-          ...(item.flyer_style && { flyer_style: item.flyer_style }),
+          ...(item.language        && { language:        item.language }),
+          ...(item.is_outdoor != null && { is_outdoor:   item.is_outdoor }),
+          ...(item.masks_required  && { masks_required:  item.masks_required }),
+          ...(item.price_raw       && { price_raw:       item.price_raw }),
+          ...(item.event_url       && { event_url:       item.event_url }),
+          ...(item.flyer_style     && { flyer_style:     item.flyer_style }),
         })
         .eq("id", eventId);
 
@@ -584,7 +593,10 @@ Deno.serve(async (req) => {
 
     seenEventIds.add(eventId);
 
-    // Sighting
+    // ── Sighting ──────────────────────────────────────────────────────────
+    // Always created — this is what drives confidence recomputation.
+    // The trigger on event_sightings calls compute_event_confidence()
+    // automatically after this insert.
     const { error: sightingError } = await supabase.from("event_sightings").insert({
       event_id: eventId,
       photo_id: photoRecord?.id ?? null,
@@ -599,7 +611,7 @@ Deno.serve(async (req) => {
       console.error("Sighting insert error:", JSON.stringify(sightingError));
     }
 
-    // Board flyer upsert
+    // ── Board flyer upsert ────────────────────────────────────────────────
     if (resolvedBoardId) {
       const { error: flyerError } = await supabase.from("board_flyers").upsert(
         {
@@ -618,7 +630,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Talent
+    // ── Talent ────────────────────────────────────────────────────────────
     for (const t of item.talent ?? []) {
       if (!t.name) continue;
       const canonical = t.name.toLowerCase().trim();
@@ -680,7 +692,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    results.push({ event_id: eventId, name: item.name });
+    results.push({ event_id: eventId, name: item.name, match_type: matchType });
   }
 
   // ── Mark removed flyers ───────────────────────────────────────────────────
