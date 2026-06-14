@@ -22,7 +22,6 @@ const CATEGORIES = [
 ]
 
 const WHEN_OPTIONS = [
-  { value: 'upcoming', label: 'Upcoming' },
   { value: 'week',     label: 'This week' },
   { value: 'all',      label: 'All' },
 ]
