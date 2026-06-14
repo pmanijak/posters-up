@@ -1,4 +1,5 @@
 // app/components/event-card.tsx
+import { categoryColor, hexToRgba } from '@/lib/categories'
 
 interface TalentEntry {
   id: string
@@ -76,31 +77,6 @@ function formatTalent(talent: TalentEntry[]): string | null {
   return talent.map((t) => t.name).join(' · ')
 }
 
-// Category → left-border accent color
-// These stay as inline styles since they're dynamic per-event values,
-// not part of the global theme.
-const CATEGORY_COLORS: Record<string, string> = {
-  music:         '#D4956A',  // warm amber
-  film:          '#7A9EC4',  // slate blue
-  theater:       '#B48AC4',  // muted purple
-  dance:         '#7ABDB4',  // teal
-  comedy:        '#D4B86A',  // golden
-  spoken_word:   '#9AB47A',  // sage
-  visual_art:    '#C48AAA',  // dusty rose
-  market:        '#C4AA7A',  // tan
-  lecture:       '#7A9EB4',  // steel blue
-  workshop:      '#C4956A',  // terracotta
-  fitness:       '#7AC49A',  // mint
-  community:     '#7AAAC4',  // sky
-  support_group: '#A49AC4',  // lavender
-  fundraiser:    '#C4A07A',  // sand
-  party:         '#D4B86A',  // golden
-}
-
-function categoryColor(category: string | null): string {
-  return category ? (CATEGORY_COLORS[category] ?? '#8A9E8F') : '#8A9E8F'
-}
-
 // ── Card ───────────────────────────────────────────────────────────────────
 
 export function EventCard({ event }: { event: Event }) {
@@ -121,26 +97,32 @@ export function EventCard({ event }: { event: Event }) {
     : null
 
   return (
-    <div
-      className="rounded-sm overflow-hidden bg-surface-card"
-      style={{ borderLeft: `3px solid ${accentColor}` }}
-    >
+    <div className="rounded-sm overflow-hidden bg-surface-card">
       <div className="px-4 py-3">
 
-        {/* Top row: date + category */}
+        {/* Top row: date + category badge */}
         <div className="flex items-start justify-between gap-3 mb-1.5">
           <span className="text-xs font-mono tracking-wider text-content-muted">
             {formatDate(event)}
           </span>
           {event.event_category && (
-            <span className="text-xs shrink-0 font-medium" style={{ color: accentColor }}>
+            <span
+              className="text-xs shrink-0 font-medium px-2 py-0.5 rounded"
+              style={{
+                color: accentColor,
+                background: hexToRgba(accentColor, 0.15),
+              }}
+            >
               {event.event_category.replace('_', ' ')}
             </span>
           )}
         </div>
 
-        {/* Name */}
-        <h2 className="font-bold leading-snug mb-1 text-content-primary" style={{ fontFamily: 'Georgia, serif', fontSize: '1.05rem' }}>
+        {/* Name — accent color */}
+        <h2
+          className="font-bold leading-snug mb-1"
+          style={{ fontFamily: 'Georgia, serif', fontSize: '1.05rem', color: accentColor }}
+        >
           {event.name}
         </h2>
 

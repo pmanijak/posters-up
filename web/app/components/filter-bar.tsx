@@ -2,22 +2,7 @@
 // app/components/filter-bar.tsx
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback } from 'react'
-
-const CATEGORIES = [
-  { value: 'all',         label: 'All' },
-  { value: 'music',       label: 'Music' },
-  { value: 'film',        label: 'Film' },
-  { value: 'theater',     label: 'Theater' },
-  { value: 'dance',       label: 'Dance' },
-  { value: 'comedy',      label: 'Comedy' },
-  { value: 'spoken_word', label: 'Spoken Word' },
-  { value: 'visual_art',  label: 'Art' },
-  { value: 'market',      label: 'Market' },
-  { value: 'workshop',    label: 'Workshop' },
-  { value: 'community',   label: 'Community' },
-  { value: 'fundraiser',  label: 'Fundraiser' },
-  { value: 'other',       label: 'Other' },
-]
+import { CATEGORIES, categoryColor, hexToRgba } from '@/lib/categories'
 
 interface FilterBarProps {
   activeCategory?: string
@@ -47,16 +32,26 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
           cat.value === 'all'
             ? !activeCategory || activeCategory === 'all'
             : activeCategory === cat.value
+        const color = cat.value === 'all' ? '#8A9E8F' : categoryColor(cat.value)
+
         return (
           <button
             key={cat.value}
             onClick={() => updateFilter('category', cat.value)}
-            className={[
-              'px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
+            className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+            style={
               isActive
-                ? 'bg-content-secondary text-surface-page border-content-secondary'
-                : 'bg-transparent text-content-muted border-edge-subtle hover:border-edge',
-            ].join(' ')}
+                ? {
+                    color,
+                    background: hexToRgba(color, 0.15),
+                    border: `1px solid ${hexToRgba(color, 0.3)}`,
+                  }
+                : {
+                    color: '#4A5A4E',
+                    background: 'transparent',
+                    border: '1px solid #3D4A41',
+                  }
+            }
           >
             {cat.label}
           </button>
