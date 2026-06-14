@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase'
 import exifr from 'exifr'
@@ -16,6 +16,53 @@ async function resizeImage(file: File, maxDimension = 2400): Promise<Blob> {
   return new Promise(resolve => canvas.toBlob(resolve as any, 'image/jpeg', 0.85))
 }
 
+// Advances linearly from 0 to 95 over 75 seconds.
+// Jumps to 100 when the caller invokes the returned complete() function.
+function useProgress(active: boolean) {
+  const [progress, setProgress] = useState(0)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    if (active) {
+      setProgress(0)
+      const duration = 75_000   // ms
+      const target   = 95       // %
+      const tick     = 250      // ms between updates
+      const step     = (target / duration) * tick
+
+      intervalRef.current = setInterval(() => {
+        setProgress(p => {
+          const next = p + step
+          return next >= target ? target : next
+        })
+      }, tick)
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [active])
+
+  function complete() {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    setProgress(100)
+  }
+
+  function reset() {
+    setProgress(0)
+  }
+
+  return { progress, complete, reset }
+}
+
 export default function UploadPage() {
   const supabase = createClient()
   const [email, setEmail] = useState('')
@@ -26,6 +73,8 @@ export default function UploadPage() {
   const [results, setResults] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
   const [showRaw, setShowRaw] = useState(false)
+
+  const { progress, complete, reset } = useProgress(uploading)
 
   useState(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -50,6 +99,7 @@ export default function UploadPage() {
     setUploading(true)
     setError(null)
     setResults(null)
+    reset()
 
     try {
       const [gps, exifData] = await Promise.all([
@@ -88,6 +138,7 @@ export default function UploadPage() {
 
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Extraction failed')
+      complete()
       setResults(data)
     } catch (err: any) {
       setError(err.message)
@@ -167,6 +218,7 @@ export default function UploadPage() {
             Photograph a bulletin board and submit it. GPS and capture date are read
             automatically from the photo.
           </p>
+
           <label className={[
             'flex items-center justify-center w-full h-24 rounded border border-dashed border-edge-subtle text-sm cursor-pointer transition-colors',
             uploading
@@ -182,6 +234,24 @@ export default function UploadPage() {
               className="sr-only"
             />
           </label>
+
+          {/* Progress bar */}
+          {uploading && (
+            <div className="space-y-1.5">
+              <div className="h-1 w-full bg-surface-raised rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-content-secondary rounded-full"
+                  style={{
+                    width: `${progress}%`,
+                    transition: 'width 0.25s linear',
+                  }}
+                />
+              </div>
+              <p className="text-xs text-content-muted text-right">
+                {Math.round(progress)}%
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Error */}
@@ -193,7 +263,6 @@ export default function UploadPage() {
         {results && (
           <div className="bg-surface-card rounded-sm border border-edge divide-y divide-edge">
 
-            {/* Summary */}
             <div className="px-4 py-3 flex items-center justify-between">
               <span className="text-sm text-content-primary font-medium">
                 {results.events_extracted} event{results.events_extracted !== 1 ? 's' : ''} extracted
@@ -204,7 +273,6 @@ export default function UploadPage() {
               }
             </div>
 
-            {/* Warnings */}
             {results.warnings?.length > 0 && (
               <div className="px-4 py-3 space-y-1">
                 {results.warnings.map((w: string, i: number) => (
@@ -213,7 +281,6 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Event list */}
             {results.events?.length > 0 && (
               <div className="px-4 py-3 space-y-1">
                 {results.events.map((e: any, i: number) => (
@@ -225,7 +292,6 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Raw JSON toggle */}
             <div className="px-4 py-3">
               <button
                 onClick={() => setShowRaw(r => !r)}
