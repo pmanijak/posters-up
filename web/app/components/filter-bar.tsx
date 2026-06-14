@@ -21,11 +21,6 @@ const CATEGORIES = [
   { value: 'other',       label: 'Other' },
 ]
 
-const WHEN_OPTIONS = [
-  { value: 'week',     label: 'This week' },
-  { value: 'all',      label: 'All' },
-]
-
 interface FilterBarProps {
   activeCategory?: string
   activeWhen: string
@@ -75,19 +70,6 @@ export function FilterBar({ activeCategory, activeWhen }: FilterBarProps) {
 
   return (
     <div className="space-y-2">
-      {/* When */}
-      <div className="flex gap-1.5">
-        {WHEN_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            style={activeWhen === opt.value ? chipActive : chipInactive}
-            onClick={() => updateFilter('when', opt.value)}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
       {/* Category — scrollable on mobile */}
       <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
         {CATEGORIES.map((cat) => {

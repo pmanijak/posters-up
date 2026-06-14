@@ -30,21 +30,14 @@ export default async function DiscoverPage({
     .from('events_public')
     .select('*')
 
-  // Date filter    
-  if (when === 'week') {
-    const weekLater = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .split('T')[0]
-    query = query.or(
-      `and(date_start.gte.${today},date_start.lte.${weekLater}),date_type.in.(recurring,approximate,unknown)`
-    )
-  }
-  else {
-    query = query.or(
-      `date_start.gte.${today},date_type.in.(recurring,approximate,unknown)`
-    )
-  }
-  // when === 'all': no date filter
+  // Date filter: Just show the next 30 days
+  const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .split('T')[0]
+
+  query = query.or(
+    `and(date_start.gte.${today},date_start.lte.${thirtyDaysOut}),date_type.in.(recurring,approximate,unknown)`
+  )
 
   // Category filter
   if (category && category !== 'all') {
