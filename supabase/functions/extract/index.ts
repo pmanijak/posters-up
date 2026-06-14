@@ -4,6 +4,7 @@ const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+
 const SYSTEM_PROMPT = `You are an event extraction system for a community bulletin board app.
 Analyze photos of physical bulletin boards and extract structured data
 about every item posted.
@@ -571,6 +572,9 @@ Deno.serve(async (req) => {
           ...(item.price_raw       && { price_raw:       item.price_raw }),
           ...(item.event_url       && { event_url:       item.event_url }),
           ...(item.flyer_style     && { flyer_style:     item.flyer_style }),
+          // Reset enrichment_attempted_at so the enrich queue re-processes
+          // this event with the new sighting's data as additional context.
+          enrichment_attempted_at: null,
         })
         .eq("id", eventId);
 
