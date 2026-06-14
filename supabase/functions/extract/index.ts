@@ -162,8 +162,6 @@ Deno.serve(async (req) => {
     return respond({ error: "Method not allowed" }, 405);
   }
 
-  // Collects non-fatal issues to return alongside results.
-  // Lets callers see exactly what went wrong without digging through logs.
   const warnings: string[] = [];
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -191,13 +189,19 @@ Deno.serve(async (req) => {
     return respond({ error: "photo_path required" }, 400);
   }
 
-  // Warn if GPS is missing — board won't be created or matched
+  // Timestamp representing when the photo was actually taken.
+  // Used for all observation timestamps (last_seen_at, last_sighted_at,
+  // sighted_at) so the DB reflects reality rather than processing time.
+  // Falls back to now() only when EXIF capture date wasn't available.
+  const capturedAt = capture_date
+    ? new Date(capture_date).toISOString()
+    : new Date().toISOString();
+
   if (!board_id && (!lat || !lng)) {
     warnings.push("No GPS coordinates or board_id provided — photo will not be linked to a board");
   }
 
   // ── Rate limiting ─────────────────────────────────────────────────────────
-  // Note: uses created_at (the actual column name on the photos table)
   const today = new Date().toISOString().split("T")[0];
   const { count, error: countError } = await supabase
     .from("photos")
@@ -206,7 +210,6 @@ Deno.serve(async (req) => {
     .gte("created_at", `${today}T00:00:00Z`);
 
   if (countError) {
-    // Don't block the submission — just warn and proceed
     warnings.push(`Rate limit check failed: ${countError.message}`);
     console.error("Rate limit query error:", JSON.stringify(countError));
   }
@@ -233,7 +236,6 @@ Deno.serve(async (req) => {
     .download(photo_path);
 
   if (downloadError || !photoBlob) {
-    // Hard failure — nothing to extract without the photo
     console.error("Photo download error:", JSON.stringify(downloadError));
     return respond({ error: "Photo not found", detail: downloadError?.message }, 404);
   }
@@ -360,7 +362,6 @@ Deno.serve(async (req) => {
   if (!claudeRes.ok) {
     const err = await claudeRes.text();
     console.error("Claude API error:", claudeRes.status, err);
-    // Hard failure — no extraction without Claude
     return respond({ error: "Claude API error", detail: err, warnings }, 502);
   }
 
@@ -373,7 +374,6 @@ Deno.serve(async (req) => {
     if (!Array.isArray(extractedItems)) throw new Error("Response was not a JSON array");
   } catch (parseErr: any) {
     console.error("Claude response parse failed. Raw text:", rawText.slice(0, 500));
-    // Hard failure — can't write garbage to the DB
     return respond({
       error: "Failed to parse extraction response",
       detail: parseErr.message,
@@ -396,13 +396,12 @@ Deno.serve(async (req) => {
       image_url: photo_path,
       delete_after: deleteAfter.toISOString(),
       extraction_status: "complete",
-      extracted_at: new Date().toISOString(),
+      extracted_at: new Date().toISOString(),  // processing time, not capture time
     })
     .select("id")
     .single();
 
   if (photoError) {
-    // Non-fatal — we still write events, just without a photo FK
     warnings.push(`Photo record creation failed: ${photoError.message}`);
     console.error("Photo insert error:", JSON.stringify(photoError));
   }
@@ -411,7 +410,7 @@ Deno.serve(async (req) => {
     const { error: boardUpdateError } = await supabase
       .from("boards")
       .update({
-        last_sighted_at: new Date().toISOString(),
+        last_sighted_at: capturedAt,
         current_state_photo_id: photoRecord?.id,
       })
       .eq("id", resolvedBoardId);
@@ -437,10 +436,6 @@ Deno.serve(async (req) => {
     let matchType: string = "none";
 
     // ── Event matching ────────────────────────────────────────────────────
-    // find_event_match() checks URL (hard match) then fuzzy name+date+location.
-    // A match means this is an additional sighting of an existing event —
-    // we link the sighting to it rather than creating a duplicate record.
-    // Confidence recomputes automatically via trigger on event_sightings.
     const { data: match, error: matchError } = await supabase.rpc("find_event_match", {
       p_name:          item.name,
       p_date_start:    item.date_start ?? null,
@@ -499,7 +494,6 @@ Deno.serve(async (req) => {
 
     // ── Create or update event ────────────────────────────────────────────
     if (!eventId) {
-      // No match — create a new event record
       const { data: newEvent, error: eventInsertError } = await supabase
         .from("events")
         .insert({
@@ -531,6 +525,8 @@ Deno.serve(async (req) => {
           masks_required: item.masks_required ?? null,
           rsvp_required: item.rsvp_required ?? null,
           rsvp_url: item.rsvp_url ?? null,
+          first_sighted_at: capturedAt,
+          last_sighted_at: capturedAt,
         })
         .select("id")
         .single();
@@ -543,9 +539,7 @@ Deno.serve(async (req) => {
 
       eventId = newEvent?.id ?? null;
     } else {
-      // Existing event — this extraction is a new sighting.
-      // Merge in any new information: union arrays, fill sparse scalar
-      // fields, bump timestamps. Never overwrite with null.
+      // Existing event — merge in new information, bump observation timestamp.
       const { data: existing, error: fetchExistingError } = await supabase
         .from("events")
         .select("tags, accessibility")
@@ -560,8 +554,8 @@ Deno.serve(async (req) => {
       const { error: updateError } = await supabase
         .from("events")
         .update({
-          last_sighted_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          last_sighted_at: capturedAt,
+          updated_at: capturedAt,
           tags: [...new Set([...(existing?.tags ?? []), ...(item.tags ?? [])])],
           accessibility: [
             ...new Set([
@@ -594,9 +588,6 @@ Deno.serve(async (req) => {
     seenEventIds.add(eventId);
 
     // ── Sighting ──────────────────────────────────────────────────────────
-    // Always created — this is what drives confidence recomputation.
-    // The trigger on event_sightings calls compute_event_confidence()
-    // automatically after this insert.
     const { error: sightingError } = await supabase.from("event_sightings").insert({
       event_id: eventId,
       photo_id: photoRecord?.id ?? null,
@@ -604,6 +595,7 @@ Deno.serve(async (req) => {
       raw_extraction: item,
       extraction_confidence: item.confidence ?? 0.5,
       flyer_style: item.flyer_style ?? null,
+      sighted_at: capturedAt,
     });
 
     if (sightingError) {
@@ -617,7 +609,7 @@ Deno.serve(async (req) => {
         {
           board_id: resolvedBoardId,
           event_id: eventId,
-          last_seen_at: new Date().toISOString(),
+          last_seen_at: capturedAt,
           is_active: true,
           removed_at: null,
         },
