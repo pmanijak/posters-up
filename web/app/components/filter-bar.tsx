@@ -32,7 +32,7 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
           cat.value === 'all'
             ? !activeCategory || activeCategory === 'all'
             : activeCategory === cat.value
-        const color = cat.value === 'all' ? '#8A9E8F' : categoryColor(cat.value)
+        const color = categoryColor(cat.value)
 
         return (
           <button
@@ -47,10 +47,10 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
                     border: `1px solid ${hexToRgba(color, 0.3)}`,
                   }
                 : {
-                    color: '#4A5A4E',
-                    background: 'transparent',
-                    border: '1px solid #3D4A41',
-                  }
+                  color: 'var(--color-content-secondary)',
+                  background: 'transparent',
+                  border: '1px solid var(--color-content-muted)',
+                }
             }
           >
             {cat.label}
