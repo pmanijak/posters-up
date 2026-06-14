@@ -1,7 +1,5 @@
 'use client'
-
 // app/components/filter-bar.tsx
-
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useCallback } from 'react'
 
@@ -23,17 +21,16 @@ const CATEGORIES = [
 
 interface FilterBarProps {
   activeCategory?: string
-  activeWhen: string
 }
 
-export function FilterBar({ activeCategory, activeWhen }: FilterBarProps) {
+export function FilterBar({ activeCategory }: FilterBarProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
   const updateFilter = useCallback(
     (key: string, value: string) => {
       const params = new URLSearchParams(searchParams.toString())
-      if (value === 'all' || value === 'upcoming') {
+      if (value === 'all') {
         params.delete(key)
       } else {
         params.set(key, value)
@@ -51,7 +48,6 @@ export function FilterBar({ activeCategory, activeWhen }: FilterBarProps) {
     cursor: 'pointer',
     border: '1px solid transparent',
     transition: 'all 0.1s',
-    whiteSpace: 'nowrap' as const,
   }
 
   const chipActive: React.CSSProperties = {
@@ -69,25 +65,22 @@ export function FilterBar({ activeCategory, activeWhen }: FilterBarProps) {
   }
 
   return (
-    <div className="space-y-2">
-      {/* Category — scrollable on mobile */}
-      <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
-        {CATEGORIES.map((cat) => {
-          const isActive =
-            cat.value === 'all'
-              ? !activeCategory || activeCategory === 'all'
-              : activeCategory === cat.value
-          return (
-            <button
-              key={cat.value}
-              style={isActive ? chipActive : chipInactive}
-              onClick={() => updateFilter('category', cat.value)}
-            >
-              {cat.label}
-            </button>
-          )
-        })}
-      </div>
+    <div className="flex flex-wrap gap-1.5">
+      {CATEGORIES.map((cat) => {
+        const isActive =
+          cat.value === 'all'
+            ? !activeCategory || activeCategory === 'all'
+            : activeCategory === cat.value
+        return (
+          <button
+            key={cat.value}
+            style={isActive ? chipActive : chipInactive}
+            onClick={() => updateFilter('category', cat.value)}
+          >
+            {cat.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
