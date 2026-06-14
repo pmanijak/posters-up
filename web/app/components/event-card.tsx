@@ -44,7 +44,6 @@ interface Event {
 
 function formatDate(event: Event): string {
   if (event.date_type === 'specific' && event.date_start) {
-    // Parse as local date to avoid timezone shifts
     const [year, month, day] = event.date_start.split('-').map(Number)
     const date = new Date(year, month - 1, day)
     const dateStr = date
@@ -78,26 +77,28 @@ function formatTalent(talent: TalentEntry[]): string | null {
 }
 
 // Category → left-border accent color
+// These stay as inline styles since they're dynamic per-event values,
+// not part of the global theme.
 const CATEGORY_COLORS: Record<string, string> = {
-  music:        '#B94A1F',
-  film:         '#2D5F8A',
-  theater:      '#6B4E8A',
-  dance:        '#2A7A6F',
-  comedy:       '#B07D1A',
-  spoken_word:  '#4A7A4A',
-  visual_art:   '#8A4A6B',
-  market:       '#7A6B2A',
-  lecture:      '#3A5F7A',
-  workshop:     '#B06A2A',
-  fitness:      '#2A6A4A',
-  community:    '#2A5A7A',
-  support_group:'#6A5A8A',
-  fundraiser:   '#8A4A4A',
-  party:        '#B07A1A',
+  music:         '#D4956A',  // warm amber
+  film:          '#7A9EC4',  // slate blue
+  theater:       '#B48AC4',  // muted purple
+  dance:         '#7ABDB4',  // teal
+  comedy:        '#D4B86A',  // golden
+  spoken_word:   '#9AB47A',  // sage
+  visual_art:    '#C48AAA',  // dusty rose
+  market:        '#C4AA7A',  // tan
+  lecture:       '#7A9EB4',  // steel blue
+  workshop:      '#C4956A',  // terracotta
+  fitness:       '#7AC49A',  // mint
+  community:     '#7AAAC4',  // sky
+  support_group: '#A49AC4',  // lavender
+  fundraiser:    '#C4A07A',  // sand
+  party:         '#D4B86A',  // golden
 }
 
 function categoryColor(category: string | null): string {
-  return category ? (CATEGORY_COLORS[category] ?? '#8A7E72') : '#8A7E72'
+  return category ? (CATEGORY_COLORS[category] ?? '#8A9E8F') : '#8A9E8F'
 }
 
 // ── Card ───────────────────────────────────────────────────────────────────
@@ -106,102 +107,80 @@ export function EventCard({ event }: { event: Event }) {
   const isMinimal = event.flyer_style === 'minimal'
   const accentColor = categoryColor(event.event_category)
   const talentStr = formatTalent(event.talent ?? [])
-
-  // Location: prefer venue name, fall back to location_name
   const location = event.venue_name ?? event.location_name
 
-  const cardContent = (
+  const detailParts: string[] = []
+  if (event.price_raw) detailParts.push(event.price_raw)
+  else if (event.is_free) detailParts.push('Free')
+  if (event.age_restriction) detailParts.push(event.age_restriction)
+  if (event.organization_name) detailParts.push(event.organization_name)
+
+  const linkUrl = event.event_url ?? event.contact
+  const linkHref = linkUrl
+    ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
+    : null
+
+  return (
     <div
-      className="rounded-sm overflow-hidden"
-      style={{
-        background: '#fff',
-        borderLeft: `3px solid ${accentColor}`,
-        boxShadow: '0 1px 3px rgba(28,23,19,0.06)',
-      }}
+      className="rounded-sm overflow-hidden bg-surface-card"
+      style={{ borderLeft: `3px solid ${accentColor}` }}
     >
       <div className="px-4 py-3">
 
         {/* Top row: date + category */}
         <div className="flex items-start justify-between gap-3 mb-1.5">
-          <span
-            className="text-xs font-mono tracking-wider"
-            style={{ color: '#8A7E72', letterSpacing: '0.05em' }}
-          >
+          <span className="text-xs font-mono tracking-wider text-content-muted">
             {formatDate(event)}
           </span>
           {event.event_category && (
-            <span
-              className="text-xs shrink-0"
-              style={{ color: accentColor, fontWeight: 500 }}
-            >
+            <span className="text-xs shrink-0 font-medium" style={{ color: accentColor }}>
               {event.event_category.replace('_', ' ')}
             </span>
           )}
         </div>
 
         {/* Name */}
-        <h2
-          className="font-bold leading-snug mb-1"
-          style={{
-            fontFamily: 'Georgia, serif',
-            fontSize: '1.05rem',
-            color: '#1C1713',
-          }}
-        >
+        <h2 className="font-bold leading-snug mb-1 text-content-primary" style={{ fontFamily: 'Georgia, serif', fontSize: '1.05rem' }}>
           {event.name}
         </h2>
 
         {/* Talent */}
         {talentStr && (
-          <p className="text-sm mb-1" style={{ color: '#4A3F36' }}>
+          <p className="text-sm mb-1 text-content-secondary">
             {talentStr}
           </p>
         )}
 
         {/* Location */}
         {location && (
-          <p className="text-sm" style={{ color: '#6A5F56' }}>
+          <p className="text-sm text-content-muted">
             {location}
             {event.location_address && !event.venue_name && (
-              <span style={{ color: '#8A7E72' }}> · {event.location_address}</span>
+              <span className="text-content-muted"> · {event.location_address}</span>
             )}
           </p>
         )}
 
-        {/* Description — only for standard/detailed */}
+        {/* Description — standard/detailed only */}
         {!isMinimal && event.description && (
-          <p
-            className="text-sm mt-2 leading-relaxed"
-            style={{ color: '#6A5F56' }}
-          >
+          <p className="text-sm mt-2 leading-relaxed text-content-muted">
             {event.description}
           </p>
         )}
 
-        {/* For minimal: show description if it's the only info we have */}
+        {/* Minimal: show description only if it's all we have */}
         {isMinimal && event.description && !location && !talentStr && (
-          <p
-            className="text-sm mt-1 leading-relaxed"
-            style={{ color: '#6A5F56' }}
-          >
+          <p className="text-sm mt-1 leading-relaxed text-content-muted">
             {event.description}
           </p>
         )}
 
-        {/* Inline details row: price, age, org */}
-        {(() => {
-          const details: string[] = []
-          if (event.price_raw) details.push(event.price_raw)
-          else if (event.is_free) details.push('Free')
-          if (event.age_restriction) details.push(event.age_restriction)
-          if (event.organization_name) details.push(event.organization_name)
-          if (!details.length) return null
-          return (
-            <p className="text-sm mt-1.5" style={{ color: '#8A7E72' }}>
-              {details.join(' · ')}
-            </p>
-          )
-        })()}
+        {/* Details row: price, age, org */}
+        {detailParts.length > 0 && (
+          <p className="text-sm mt-1.5 text-content-muted">
+            {detailParts.join(' · ')}
+          </p>
+        )}
 
         {/* Tags */}
         {event.tags && event.tags.length > 0 && (
@@ -209,11 +188,7 @@ export function EventCard({ event }: { event: Event }) {
             {event.tags.slice(0, 6).map((tag) => (
               <span
                 key={tag}
-                className="text-xs px-2 py-0.5 rounded-full"
-                style={{
-                  background: '#F0EBE3',
-                  color: '#8A7E72',
-                }}
+                className="text-xs px-2 py-0.5 rounded-full bg-surface-raised text-content-muted"
               >
                 {tag}
               </span>
@@ -221,53 +196,28 @@ export function EventCard({ event }: { event: Event }) {
           </div>
         )}
 
-        {/* Footer: meta + link */}
-        <div
-          className="flex items-center justify-between mt-3 pt-2.5"
-          style={{ borderTop: '1px solid #F0EBE3' }}
-        >
+        {/* Footer */}
+        <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-edge">
           <div className="flex items-center gap-3">
-            {/* Sightings */}
-            <span className="text-xs" style={{ color: '#B0A898' }}>
+            <span className="text-xs text-content-muted">
               {event.sighting_count} board{event.sighting_count !== 1 ? 's' : ''}
             </span>
-
-            {/* Confidence */}
-            <span className="text-xs font-mono" style={{ color: '#B0A898' }}>
+            <span className="text-xs font-mono text-content-muted">
               {(event.confidence_score * 100).toFixed(0)}%
             </span>
-
-            {/* Flyer style — only show for minimal, it's informative */}
             {isMinimal && (
-              <span
-                className="text-xs px-1.5 py-0.5 rounded"
-                style={{ background: '#F0EBE3', color: '#8A7E72' }}
-              >
+              <span className="text-xs px-1.5 py-0.5 rounded bg-surface-raised text-content-muted">
                 minimal
               </span>
             )}
-
-            {/* Last seen */}
-            <span className="text-xs" style={{ color: '#C8BEB4' }}>
+            <span className="text-xs text-content-muted">
               {lastSeen(event.last_sighted_at)}
             </span>
           </div>
 
-          {/* Link */}
-          {event.event_url && (
+          {linkHref && (
             <a
-              href={event.event_url.startsWith('http') ? event.event_url : `https://${event.event_url}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs"
-              style={{ color: accentColor }}
-            >
-              Details →
-            </a>
-          )}
-          {!event.event_url && event.contact && (
-            <a
-              href={event.contact.startsWith('http') ? event.contact : `https://${event.contact}`}
+              href={linkHref}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs"
@@ -280,6 +230,4 @@ export function EventCard({ event }: { event: Event }) {
       </div>
     </div>
   )
-
-  return cardContent
 }

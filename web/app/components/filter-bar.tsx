@@ -40,30 +40,6 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
     [router, searchParams]
   )
 
-  const chipBase: React.CSSProperties = {
-    padding: '3px 10px',
-    borderRadius: '999px',
-    fontSize: '12px',
-    fontWeight: 500,
-    cursor: 'pointer',
-    border: '1px solid transparent',
-    transition: 'all 0.1s',
-  }
-
-  const chipActive: React.CSSProperties = {
-    ...chipBase,
-    background: '#1C1713',
-    color: '#F7F3EE',
-    borderColor: '#1C1713',
-  }
-
-  const chipInactive: React.CSSProperties = {
-    ...chipBase,
-    background: 'transparent',
-    color: '#8A7E72',
-    borderColor: '#E0D8CE',
-  }
-
   return (
     <div className="flex flex-wrap gap-1.5">
       {CATEGORIES.map((cat) => {
@@ -74,8 +50,13 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
         return (
           <button
             key={cat.value}
-            style={isActive ? chipActive : chipInactive}
             onClick={() => updateFilter('category', cat.value)}
+            className={[
+              'px-2.5 py-1 rounded-full text-xs font-medium border transition-colors',
+              isActive
+                ? 'bg-content-secondary text-surface-page border-content-secondary'
+                : 'bg-transparent text-content-muted border-edge-subtle hover:border-edge',
+            ].join(' ')}
           >
             {cat.label}
           </button>

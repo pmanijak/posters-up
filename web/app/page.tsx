@@ -1,13 +1,9 @@
 // app/page.tsx
-// Move your existing upload form to app/upload/page.tsx if it lives here.
-// This becomes the home page — discovery is the primary use of the app.
-
 import { Suspense } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { FilterBar } from './components/filter-bar'
 import { EventCard } from './components/event-card'
 
-// Public page — anon key is fine, no auth needed.
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
@@ -15,7 +11,6 @@ const supabase = createClient(
 
 interface SearchParams {
   category?: string
-  when?: string
 }
 
 export default async function DiscoverPage({
@@ -23,28 +18,23 @@ export default async function DiscoverPage({
 }: {
   searchParams: Promise<SearchParams>
 }) {
-  const { category, when } = await searchParams
+  const { category } = await searchParams
   const today = new Date().toISOString().split('T')[0]
+  const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .split('T')[0]
 
   let query = supabase
     .from('events_public')
     .select('*')
+    .or(
+      `and(date_start.gte.${today},date_start.lte.${thirtyDaysOut}),date_type.in.(recurring,approximate,unknown)`
+    )
 
-  // Date filter: Just show the next 30 days
-  const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-  .toISOString()
-  .split('T')[0]
-
-  query = query.or(
-    `and(date_start.gte.${today},date_start.lte.${thirtyDaysOut}),date_type.in.(recurring,approximate,unknown)`
-  )
-
-  // Category filter
   if (category && category !== 'all') {
     query = query.eq('event_category', category)
   }
 
-  // Specific dates first (ascending), undated events at the end
   const { data: events, error } = await query
     .order('date_start', { ascending: true, nullsFirst: false })
     .limit(100)
@@ -56,27 +46,23 @@ export default async function DiscoverPage({
   const eventList = events ?? []
 
   return (
-    <div className="min-h-screen" style={{ background: '#F7F3EE' }}>
+    <div className="min-h-screen bg-surface-page">
 
       {/* Header */}
-      <header className="border-b" style={{ borderColor: '#E0D8CE' }}>
+      <header className="border-b border-edge">
         <div className="max-w-2xl mx-auto px-4 py-6">
           <div className="flex items-baseline justify-between">
             <div>
-              <h1
-                className="text-2xl font-bold tracking-widest uppercase"
-                style={{ fontFamily: 'Georgia, serif', color: '#B94A1F', letterSpacing: '0.15em' }}
-              >
+              <h1 className="font-marker text-3xl text-content-primary">
                 Posters Up
               </h1>
-              <p className="text-sm mt-0.5" style={{ color: '#8A7E72' }}>
+              <p className="text-sm mt-0.5 text-content-muted">
                 Events from the bulletin boards around Olympia
               </p>
             </div>
             <a
               href="/upload"
-              className="text-xs px-3 py-1.5 rounded border transition-colors"
-              style={{ borderColor: '#E0D8CE', color: '#8A7E72' }}
+              className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
             >
               + Submit photo
             </a>
@@ -84,14 +70,11 @@ export default async function DiscoverPage({
         </div>
       </header>
 
-      {/* Filters — client component */}
-      <div
-        className="sticky top-0 z-10 border-b"
-        style={{ background: '#F7F3EE', borderColor: '#E0D8CE' }}
-      >
+      {/* Filters */}
+      <div className="sticky top-0 z-10 border-b border-edge bg-surface-page">
         <div className="max-w-2xl mx-auto px-4 py-3">
           <Suspense fallback={null}>
-            <FilterBar activeCategory={category} activeWhen={when} />
+            <FilterBar activeCategory={category} />
           </Suspense>
         </div>
       </div>
@@ -99,13 +82,13 @@ export default async function DiscoverPage({
       {/* Event list */}
       <main className="max-w-2xl mx-auto px-4 py-6">
         {eventList.length === 0 ? (
-          <EmptyState when={when} category={category} />
+          <EmptyState category={category} />
         ) : (
           <div className="space-y-3">
             {eventList.map((event) => (
               <EventCard key={event.id} event={event} />
             ))}
-            <p className="text-center text-xs pt-4" style={{ color: '#8A7E72' }}>
+            <p className="text-center text-xs pt-4 text-content-muted">
               {eventList.length} event{eventList.length !== 1 ? 's' : ''}
               {category && category !== 'all' ? ` · ${category}` : ''}
             </p>
@@ -116,21 +99,15 @@ export default async function DiscoverPage({
   )
 }
 
-function EmptyState({
-  when,
-  category,
-}: {
-  when: string
-  category?: string
-}) {
+function EmptyState({ category }: { category?: string }) {
   return (
     <div className="text-center py-16">
-      <p className="text-lg mb-2" style={{ fontFamily: 'Georgia, serif', color: '#1C1713' }}>
+      <p className="text-lg mb-2 font-marker text-content-primary">
         No events found
       </p>
-      <p className="text-sm" style={{ color: '#8A7E72' }}>
+      <p className="text-sm text-content-muted">
         {category && category !== 'all'
-          ? `No ${category} events ${when === 'week' ? 'this week' : 'coming up'}. Try a different category.`
+          ? `No ${category} events coming up. Try a different category.`
           : 'Nothing here yet — submit a photo to get started.'}
       </p>
     </div>
