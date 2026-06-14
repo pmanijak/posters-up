@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase'
 import exifr from 'exifr'
 
@@ -20,6 +21,7 @@ export default function UploadPage() {
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
   const [user, setUser] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const [results, setResults] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
@@ -28,6 +30,7 @@ export default function UploadPage() {
   useState(() => {
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) setUser(data.user)
+      setLoading(false)
     })
   })
 
@@ -93,6 +96,10 @@ export default function UploadPage() {
     }
   }
 
+  if (loading) return (
+    <div className="min-h-screen bg-surface-page" />
+  )
+
   if (!user) return (
     <div className="min-h-screen bg-surface-page flex items-center justify-center px-4">
       <div className="w-full max-w-sm space-y-6">
@@ -126,9 +133,9 @@ export default function UploadPage() {
 
         {error && <p className="text-sm text-red-400">{error}</p>}
 
-        <a href="/" className="block text-xs text-content-muted hover:text-content-secondary">
+        <Link href="/" className="block text-xs text-content-muted hover:text-content-secondary">
           ← Back to events
-        </a>
+        </Link>
       </div>
     </div>
   )
@@ -145,9 +152,9 @@ export default function UploadPage() {
           </div>
           <div className="flex items-center gap-4">
             <span className="text-xs text-content-muted">{user.email}</span>
-            <a href="/" className="text-xs text-content-muted hover:text-content-secondary">
+            <Link href="/" className="text-xs text-content-muted hover:text-content-secondary">
               ← Events
-            </a>
+            </Link>
           </div>
         </div>
       </header>
