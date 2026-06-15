@@ -17,6 +17,7 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
       const params = new URLSearchParams(searchParams.toString())
       if (value === 'all' || value === '') {
         params.delete(key)
+         params.delete('q')
       } else {
         params.set(key, value)
       }
