@@ -1,6 +1,9 @@
 'use client'
 
 import { useState } from 'react'
+import type { ReactNode } from 'react'
+import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { categoryColor, hexToRgba } from '@/lib/categories'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -52,12 +55,6 @@ interface BoardLocation {
   last_seen_at: string
 }
 
-interface Verification {
-  source_url: string
-  source_type: string
-  confirmed: string[]
-}
-
 interface EnrichmentFound {
   date_start: string | null
   time_start: string | null
@@ -69,27 +66,34 @@ interface EnrichmentFound {
 
 interface TellMeMoreData {
   boards: BoardLocation[]
-  verifications: Verification[]
+  verifications: { source_url: string; source_type: string; confirmed: string[] }[]
   enrichment_found: EnrichmentFound | null
 }
 
-// ── Constants ──────────────────────────────────────────────────────────────
+interface Supplements {
+  date: string | null
+  address: string | null
+  description: string | null
+  link: string | null
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+function formatTime(h: number, m: number): string {
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  const hour = h > 12 ? h - 12 : h === 0 ? 12 : h
+  return m === 0 ? `${hour}${ampm}` : `${hour}:${String(m).padStart(2, '0')}${ampm}`
+}
 
 function formatDate(event: Event): string {
   if (event.date_type === 'specific' && event.date_start) {
     const [year, month, day] = event.date_start.split('-').map(Number)
-    const date = new Date(year, month - 1, day)
-    const dateStr = date
+    const dateStr = new Date(year, month - 1, day)
       .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
       .toUpperCase()
     if (event.time_start) {
       const [h, m] = event.time_start.split(':').map(Number)
-      const ampm = h >= 12 ? 'PM' : 'AM'
-      const hour = h > 12 ? h - 12 : h === 0 ? 12 : h
-      const time = m === 0 ? `${hour}${ampm}` : `${hour}:${String(m).padStart(2, '0')}${ampm}`
-      return `${dateStr} · ${time}`
+      return `${dateStr} · ${formatTime(h, m)}`
     }
     return dateStr
   }
@@ -99,18 +103,12 @@ function formatDate(event: Event): string {
 
 function formatFoundDate(dateStr: string, timeStr?: string | null): string {
   const [year, month, day] = dateStr.split('-').map(Number)
-  const date = new Date(year, month - 1, day)
-  const datePart = date.toLocaleDateString('en-US', {
+  const datePart = new Date(year, month - 1, day).toLocaleDateString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric',
   })
   if (timeStr) {
     const [h, m] = timeStr.split(':').map(Number)
-    const ampm = h >= 12 ? 'PM' : 'AM'
-    const hour = h > 12 ? h - 12 : h === 0 ? 12 : h
-    const timePart = m === 0
-      ? `${hour}${ampm}`
-      : `${hour}:${String(m).padStart(2, '0')}${ampm}`
-    return `${datePart} · ${timePart}`
+    return `${datePart} · ${formatTime(h, m)}`
   }
   return datePart
 }
@@ -132,6 +130,20 @@ function formatTalent(talent: TalentEntry[]): string | null {
   return talent.map((t) => t.name).join(' · ')
 }
 
+// Wraps every case-insensitive occurrence of query in the text with an
+// accent-colored span. Returns the original string when there are no matches.
+function highlightText(text: string, query: string, color: string): ReactNode {
+  if (!query.trim()) return text
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'))
+  if (parts.length === 1) return text
+  return parts.map((part, i) =>
+    part.toLowerCase() === query.toLowerCase()
+      ? <span key={i} style={{ color, fontWeight: 500 }}>{part}</span>
+      : part
+  )
+}
+
 async function fetchTellMeMore(eventId: string): Promise<TellMeMoreData> {
   try {
     const res = await fetch(`/api/events/${eventId}/tell-me-more`)
@@ -142,63 +154,52 @@ async function fetchTellMeMore(eventId: string): Promise<TellMeMoreData> {
   }
 }
 
-// ── Found supplement helpers ───────────────────────────────────────────────
-//
-// Only surface enrichment values that add something the flyer didn't have.
-// If the flyer already has a date, showing the web-found date is redundant.
-// If the flyer had no address but we found one, that's genuinely useful.
-
-interface Supplements {
-  date: string | null
-  address: string | null
-  description: string | null
-  link: string | null  // event_url ?? contact from enrichment
-}
-
 function getSupplements(event: Event, found: EnrichmentFound | null): Supplements {
   if (!found) return { date: null, address: null, description: null, link: null }
-
   return {
-    // Date: only when the flyer didn't have a specific date
     date: event.date_type !== 'specific' && found.date_start
       ? formatFoundDate(found.date_start, found.time_start)
       : null,
-
-    // Address: only when the flyer had none
-    address: !event.location_address ? found.location_address : null,
-
-    // Description: only when the flyer had none
-    description: !event.description ? found.description : null,
-
-    // Link: only when the event record has no external link already
-    link: !(event.event_url ?? event.contact)
-      ? (found.event_url ?? found.contact)
-      : null,
+    address:     !event.location_address             ? found.location_address : null,
+    description: !event.description                  ? found.description      : null,
+    link:        !(event.event_url ?? event.contact) ? (found.event_url ?? found.contact) : null,
   }
 }
 
 // ── Card ───────────────────────────────────────────────────────────────────
 
 export function EventCard({ event }: { event: Event }) {
+  const searchParams = useSearchParams()
   const [expanded, setExpanded] = useState(false)
   const [data, setData] = useState<TellMeMoreData | null>(null)
   const [loading, setLoading] = useState(false)
 
-  const isMinimal = event.flyer_style === 'minimal'
+  const q           = searchParams.get('q') ?? ''
+  const isMinimal   = event.flyer_style === 'minimal'
   const accentColor = categoryColor(event.event_category)
-  const talentStr = formatTalent(event.talent ?? [])
-  const location = event.venue_name ?? event.location_name
+  const talentStr   = formatTalent(event.talent ?? [])
+  const location    = event.venue_name ?? event.location_name
 
   const detailParts: string[] = []
-  if (event.price_raw) detailParts.push(event.price_raw)
-  else if (event.is_free) detailParts.push('Free')
-  if (event.age_restriction) detailParts.push(event.age_restriction)
+  if (event.price_raw)         detailParts.push(event.price_raw)
+  else if (event.is_free)      detailParts.push('Free')
+  if (event.age_restriction)   detailParts.push(event.age_restriction)
   if (event.organization_name) detailParts.push(event.organization_name)
 
-  const linkUrl = event.event_url ?? event.contact
+  const linkUrl  = event.event_url ?? event.contact
   const linkHref = linkUrl
     ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
     : null
+
+  function tagHref(tag: string): string {
+    const params = new URLSearchParams(searchParams.toString())
+    params.set('q', tag)
+    return `/?${params.toString()}`
+  }
+
+  function tagIsActive(tag: string): boolean {
+    return q.length > 0 && tag.toLowerCase().includes(q.toLowerCase())
+  }
 
   async function handleToggle() {
     if (!expanded && data === null) {
@@ -209,8 +210,8 @@ export function EventCard({ event }: { event: Event }) {
     setExpanded((v) => !v)
   }
 
-  const supplements = data ? getSupplements(event, data.enrichment_found) : null
-  const hasSupplements = supplements && Object.values(supplements).some(Boolean)
+  const supplements    = data ? getSupplements(event, data.enrichment_found) : null
+  const hasSupplements = supplements !== null && Object.values(supplements).some(Boolean)
 
   return (
     <div className="rounded-sm overflow-hidden bg-surface-card">
@@ -254,17 +255,17 @@ export function EventCard({ event }: { event: Event }) {
           </p>
         )}
 
-        {/* Description — standard/detailed only */}
+        {/* Description — standard/detailed only; highlight query matches */}
         {!isMinimal && event.description && (
           <p className="text-sm mt-2 leading-relaxed text-content-muted">
-            {event.description}
+            {highlightText(event.description, q, accentColor)}
           </p>
         )}
 
         {/* Minimal: show description only if it's literally all we have */}
         {isMinimal && event.description && !location && !talentStr && (
           <p className="text-sm mt-1 leading-relaxed text-content-muted">
-            {event.description}
+            {highlightText(event.description, q, accentColor)}
           </p>
         )}
 
@@ -275,16 +276,22 @@ export function EventCard({ event }: { event: Event }) {
           </p>
         )}
 
-        {/* Tags */}
+        {/* Tags — highlighted when they match the active query */}
         {event.tags && event.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2">
             {event.tags.slice(0, 6).map((tag) => (
-              <span
+              <Link
                 key={tag}
-                className="text-xs px-2 py-0.5 rounded-full bg-surface-raised text-content-muted"
+                href={tagHref(tag)}
+                className="text-xs px-2 py-0.5 rounded-full transition-colors"
+                style={
+                  tagIsActive(tag)
+                    ? { background: hexToRgba(accentColor, 0.15), color: accentColor }
+                    : { background: 'var(--color-surface-raised)', color: 'var(--color-content-muted)' }
+                }
               >
                 {tag}
-              </span>
+              </Link>
             ))}
           </div>
         )}
@@ -354,40 +361,35 @@ export function EventCard({ event }: { event: Event }) {
                 ) : null}
 
                 {/* Found values — only what's missing from the flyer.
-                    No source list; the information speaks for itself.
                     Never shown for minimal events. */}
-                {!isMinimal && hasSupplements && (
+                {!isMinimal && hasSupplements && supplements && (
                   <div className="space-y-1.5">
-                    {supplements!.date && (
-                      <p className="text-sm text-content-secondary">
-                        {supplements!.date}
-                      </p>
+                    {supplements.date && (
+                      <p className="text-sm text-content-secondary">{supplements.date}</p>
                     )}
-                    {supplements!.address && (
-                      <p className="text-sm text-content-secondary">
-                        {supplements!.address}
-                      </p>
+                    {supplements.address && (
+                      <p className="text-sm text-content-secondary">{supplements.address}</p>
                     )}
-                    {supplements!.description && (
+                    {supplements.description && (
                       <p className="text-sm leading-relaxed text-content-muted">
-                        {supplements!.description}
+                        {supplements.description}
                       </p>
                     )}
-                    {supplements!.link && (
+                    {supplements.link && (
                       <a
-                        href={supplements!.link}
+                        href={supplements.link}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="block text-xs"
                         style={{ color: accentColor }}
                       >
-                        {sourceDomain(supplements!.link)} →
+                        {sourceDomain(supplements.link)} →
                       </a>
                     )}
                   </div>
                 )}
 
-                {/* Flyer's own external link — shown last when present */}
+                {/* Flyer's own external link */}
                 {linkHref && (
                   <a
                     href={linkHref}
