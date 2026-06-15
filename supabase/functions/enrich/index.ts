@@ -313,6 +313,29 @@ CRITICAL RULES:
   NEVER personal mobile numbers. NEVER personal email addresses. If you find only personal
   contacts, leave contact null.
 
+TOUR AND SHOWS LISTINGS:
+If you find a general upcoming shows or tour page (e.g. artist-website.com/shows or
+/tour) rather than a page specific to one event, do NOT stop there. That page confirms
+the artist is active but does not confirm the specific local show. You must go further:
+- Scan the listing for a show in the board's city/region
+- If you find one, report that specific date and venue in found.date_start /
+  found.location_address, and set event_url to the deepest link available (the
+  specific event page or ticketing link for that show, not the tour index)
+- If you cannot identify a show in the board's city on that listing, leave
+  date_start and location_address null — do not report dates for other cities
+- A follow-up search for "[artist name] [city]" or "[artist name] [venue name]"
+  is a good use of a remaining search if the tour page was ambiguous
+
+VERIFIED FIELDS:
+verified_fields must only list fields you confirmed for THIS specific event in THIS city.
+- A tour listing page confirms "name" only — not date_start or location_address —
+  unless you found the specific local show on it.
+- A venue calendar page confirms name, date_start, location_address, location_name.
+- A ticketing page for the specific show confirms name, date_start, time_start,
+  location_address, price_raw (if present), age_restriction (if present).
+Do not include a field in verified_fields unless you are certain it matches this
+specific local event, not some other show by the same artist.
+
 SOURCE TYPES (classify each source you find):
   "venue_website"  — the venue's own site or calendar (highest trust)
   "org_website"    — the organizer's own website
