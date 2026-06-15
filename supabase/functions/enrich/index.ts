@@ -8,16 +8,20 @@
 //   non-null = already attempted; reset to null by extract when a new
 //              sighting arrives so the event is re-queued with fresh data
 //
+// Design principle:
+//   events holds what the flyer says.
+//   Web search results are never written to events field columns.
+//   Enrichment data lives in event_sightings.enrichment_data (JSONB),
+//   where the presentation layer can display it as a distinct "more info"
+//   layer with source attribution — not as authoritative flyer content.
+//   Web sources feed confidence via event_verifications only.
+//
 // Rules:
 //   - Never enrich flyer_style = 'minimal' events (intentionally sparse)
-//   - Never fill location_address for minimal events (enforced by the above)
-//   - contact field: public URLs only, no personal phone/email
-//   - Non-null wins: only fill fields that are currently null on the event
-//   - Geo validation: if a found location_address doesn't match the board's
-//     city/region, suppress it AND suppress date/time fields — they belong
-//     to a different show (e.g. a touring artist's show in another city)
-//   - One event_verifications row per web source found
-//   - DB trigger handles confidence recomputation after each insert
+//   - Web-found data → event_sightings.enrichment_data only
+//   - Web sources → event_verifications (feeds confidence trigger)
+//   - events is never updated by this function (except enrichment_attempted_at)
+//   - DB trigger handles confidence recomputation after each verification insert
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -93,10 +97,11 @@ interface UserLocation {
 }
 
 // Bundles the board's raw coordinates with the derived UserLocation.
-// Both travel together through the pipeline so processEvent has access
-// to coords for future geocoded-result haversine validation, and
-// userLocation for the web_search tool's user_location hint and city
-// constraint in the enrichment prompt.
+// Both travel together through the pipeline:
+//   coords      — available for future haversine validation if we ever
+//                 geocode found addresses
+//   userLocation — passed to the web_search tool hint and prepended to
+//                  the enrichment prompt as a city constraint
 interface LocationContext {
   coords: Coords;
   userLocation: UserLocation | null;
@@ -145,26 +150,13 @@ function classifySourceByUrl(url: string): SourceType {
 }
 
 // ---------------------------------------------------------------------------
-// Personal contact guard
-// Prevents personal phone numbers and email addresses reaching events.contact.
-// Policy: public-facing URLs only. Personal data stays in raw_extraction.
-// ---------------------------------------------------------------------------
-
-const PERSONAL_PHONE_RE = /\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b/;
-const PERSONAL_EMAIL_RE = /\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b/i;
-
-function isPersonalContact(value: string): boolean {
-  return PERSONAL_PHONE_RE.test(value) || PERSONAL_EMAIL_RE.test(value);
-}
-
-// ---------------------------------------------------------------------------
-// Geo helpers
-// ---------------------------------------------------------------------------
-
-// GeoJSON point parser.
+// GeoJSON point parser
+//
 // Supabase/PostgREST returns GEOGRAPHY(POINT) as GeoJSON:
 //   { "type": "Point", "coordinates": [lng, lat] }
 // Note: GeoJSON coordinate order is [longitude, latitude].
+// ---------------------------------------------------------------------------
+
 function parseGeoPoint(raw: unknown): Coords | null {
   if (!raw) return null;
   try {
@@ -177,41 +169,6 @@ function parseGeoPoint(raw: unknown): Coords | null {
     // malformed
   }
   return null;
-}
-
-// Haversine distance in kilometres between two coordinate pairs.
-// Available for future use when geocoding found addresses to validate
-// distance against the board's coords (rather than city string matching).
-function haversineKm(a: Coords, b: Coords): number {
-  const R = 6371;
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const sinLat = Math.sin(dLat / 2);
-  const sinLng = Math.sin(dLng / 2);
-  const h =
-    sinLat * sinLat +
-    Math.cos((a.lat * Math.PI) / 180) *
-      Math.cos((b.lat * Math.PI) / 180) *
-      sinLng * sinLng;
-  return 2 * R * Math.asin(Math.sqrt(h));
-}
-
-// City/region string match against a found address string.
-// Used to gate location_address (and date/time) promotion when a
-// web result may be for a different city — e.g. a touring artist's
-// show in Ohio surfacing when the board is in Olympia, WA.
-// Falls back to true (permissive) when no city is known, so events
-// without board geo data are still enriched rather than silently skipped.
-function addressMatchesCity(
-  address: string,
-  city: string | undefined,
-  region: string | undefined
-): boolean {
-  if (!city && !region) return true; // no reference point — allow
-  const addr = address.toLowerCase();
-  if (city && addr.includes(city.toLowerCase())) return true;
-  if (region && addr.includes(region.toLowerCase())) return true;
-  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,9 +273,7 @@ async function saveBoardGeo(
   }
 }
 
-// Returns coords + userLocation together so processEvent has both available.
-// coords: for future haversine validation against geocoded result addresses.
-// userLocation: for the web_search tool hint and the city constraint in the prompt.
+// Returns coords + userLocation together so the full context travels as one unit.
 async function resolveLocationContext(
   supabase: SupabaseClient,
   eventId: string
@@ -344,7 +299,9 @@ async function resolveLocationContext(
 const ENRICHMENT_SYSTEM_PROMPT = `You are a web research assistant for a community event discovery app.
 
 You receive partial event data extracted from a physical bulletin board flyer.
-Search the web to find any missing details — full dates, venue address, event URL, organizer website.
+Search the web to find supporting information — full dates, venue address, event URL,
+organizer website, description. This data will be shown to users as supplementary
+"found online" context alongside what was on the flyer, not as a replacement for it.
 
 CRITICAL RULES:
 - Only report information confirmed by a web source. Never guess or invent.
@@ -355,8 +312,6 @@ CRITICAL RULES:
 - contact field: public-facing URLs ONLY — venue website, org booking page, org website.
   NEVER personal mobile numbers. NEVER personal email addresses. If you find only personal
   contacts, leave contact null.
-- Do not re-report fields that are already known (marked "already known" in the input).
-  For already-known fields, still list the source if it confirms them.
 
 SOURCE TYPES (classify each source you find):
   "venue_website"  — the venue's own site or calendar (highest trust)
@@ -378,7 +333,7 @@ If you found nothing, output exactly: {"found": {}, "sources": []}
     "location_address": "full street address or null",
     "event_url": "direct link to this specific event or null",
     "contact": "public venue/org URL only — no personal contacts — or null",
-    "description": "1-2 sentence description if current one is null, else null"
+    "description": "1-2 sentence description or null"
   },
   "sources": [
     {
@@ -398,9 +353,9 @@ async function callEnrichmentApi(
   const userLocation = locationCtx?.userLocation ?? null;
   const knownLines: string[] = [];
 
-  // Board location comes first so it reads as the authoritative constraint
-  // before the event details. Claude sees it as "search for this event
-  // in this place" rather than "search for this event, oh and by the way".
+  // Board location comes first — it is the authoritative constraint.
+  // Claude should find the show in this city, not a different show by
+  // the same artist or under the same name elsewhere.
   if (userLocation?.city) {
     const loc = [userLocation.city, userLocation.region, userLocation.country]
       .filter(Boolean)
@@ -410,31 +365,29 @@ async function callEnrichmentApi(
 
   knownLines.push(`Name: ${event.name}`);
   if (event.organization_name) knownLines.push(`Organizer: ${event.organization_name}`);
-  if (event.date_start) knownLines.push(`Date: already known — ${event.date_start}`);
+  if (event.date_start) knownLines.push(`Date: ${event.date_start}`);
   else if (event.date_raw) knownLines.push(`Date (as written on flyer): ${event.date_raw}`);
   else knownLines.push("Date: unknown");
-  if (event.time_start) knownLines.push(`Time: already known — ${event.time_start}`);
+  if (event.time_start) knownLines.push(`Time: ${event.time_start}`);
   if (event.location_name) knownLines.push(`Venue name: ${event.location_name}`);
-  if (event.location_address) knownLines.push(`Address: already known — ${event.location_address}`);
-  else knownLines.push("Address: missing");
-  if (event.event_url) knownLines.push(`Event URL: already known — ${event.event_url}`);
-  else knownLines.push("Event URL: missing");
+  if (event.location_address) knownLines.push(`Address: ${event.location_address}`);
+  if (event.event_url) knownLines.push(`Event URL: ${event.event_url}`);
   if (event.description) knownLines.push(`Description: ${event.description}`);
 
   const missingFields = [
-    !event.date_start && "date_start",
-    !event.time_start && "time_start",
-    !event.location_address && "location_address",
-    !event.event_url && "event_url",
-    !event.contact && "contact (public URL only)",
+    !event.date_start && "date",
+    !event.time_start && "time",
+    !event.location_address && "address",
+    !event.event_url && "event URL",
+    !event.contact && "organizer/venue website",
     !event.description && "description",
   ].filter(Boolean);
 
   const userMessage =
     knownLines.join("\n") +
     (missingFields.length > 0
-      ? `\n\nMissing fields to find: ${missingFields.join(", ")}`
-      : "\n\nAll key fields are present; verify with web sources if possible.");
+      ? `\n\nLooking for: ${missingFields.join(", ")}`
+      : "\n\nAll key fields are present; find sources that confirm this event.");
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -529,7 +482,10 @@ async function processEvent(
   // with no web footprint. extract resets this when a new sighting arrives.
   await markAttempted(supabase, event.id);
 
-  // Mark sightings as enriched so we can audit what was attempted.
+  // Write enrichment result to event_sightings.enrichment_data.
+  // This is the only place web-found field values are stored.
+  // The presentation layer reads from here to show a distinct "found online"
+  // section — separate from what the flyer said, with source attribution.
   await supabase
     .from("event_sightings")
     .update({
@@ -542,64 +498,10 @@ async function processEvent(
   if (!result) return "failed";
   if (!result.sources.length) return "skipped";
 
-  // Update events table: non-null wins, never overwrite existing values.
-  const updates: Record<string, unknown> = {};
-  const f = result.found;
-
-  // Geo validation for location_address.
-  //
-  // A web search for a touring artist or recurring event name can surface
-  // results for a different city — same act, different show. We catch this
-  // by checking the found address against the board's city/region.
-  //
-  // If the address doesn't match, we also suppress date and time fields:
-  // they came from the same wrong-city show and are equally invalid.
-  //
-  // Note: haversineKm is available here via locationCtx.coords for future
-  // use if we add geocoding of found addresses, which would give us a more
-  // robust distance check than city string matching.
-  if (!event.location_address && f.location_address && event.flyer_style !== "minimal") {
-    const userLocation = locationCtx?.userLocation;
-    const cityMatch = addressMatchesCity(
-      f.location_address,
-      userLocation?.city,
-      userLocation?.region
-    );
-
-    if (cityMatch) {
-      updates.location_address = f.location_address;
-    } else {
-      console.warn(
-        `enrich: geo mismatch for event ${event.id} ("${event.name}") — ` +
-        `found address "${f.location_address}" does not match board location ` +
-        `"${userLocation?.city ?? "unknown"}, ${userLocation?.region ?? ""}". ` +
-        `Suppressing location_address, date_start, time_start, time_end.`
-      );
-      // Null these out so the field promotion below skips them.
-      f.date_start = null;
-      f.time_start = null;
-      f.time_end = null;
-      f.date_end = null;
-    }
-  }
-
-  if (!event.date_start && f.date_start) updates.date_start = f.date_start;
-  if (!event.date_end && f.date_end) updates.date_end = f.date_end;
-  if (!event.time_start && f.time_start) updates.time_start = f.time_start;
-  if (!event.time_end && f.time_end) updates.time_end = f.time_end;
-  if (!event.event_url && f.event_url) updates.event_url = f.event_url;
-  if (!event.contact && f.contact && !isPersonalContact(f.contact)) {
-    updates.contact = f.contact;
-  }
-  if (!event.description && f.description) updates.description = f.description;
-
-  if (Object.keys(updates).length > 0) {
-    const { error } = await supabase.from("events").update(updates).eq("id", event.id);
-    if (error) console.error(`events update failed for ${event.id}:`, error);
-  }
-
   // Insert one event_verifications row per source.
   // Each INSERT fires trg_verification_confidence → compute_event_confidence().
+  // This is the only path by which enrichment affects the events table —
+  // indirectly, via the confidence trigger.
   for (const source of result.sources) {
     if (!source.url) continue;
 
@@ -630,7 +532,7 @@ async function processEvent(
 // Selects events that:
 //   - Are active and not minimal style
 //   - Have never been enriched (enrichment_attempted_at IS NULL)
-//   - Actually need enrichment (missing key fields or low confidence)
+//   - Would benefit from enrichment (missing key fields or low confidence)
 //
 // Ordered oldest-first for FIFO queue behavior.
 // ---------------------------------------------------------------------------
