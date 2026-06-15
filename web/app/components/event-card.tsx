@@ -75,15 +75,6 @@ interface TellMeMoreData {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const SOURCE_LABELS: Record<string, string> = {
-  venue_website: 'venue website',
-  org_website: 'organizer',
-  local_calendar: 'local calendar',
-  ticketing: 'tickets',
-  news: 'local news',
-  social: 'social media',
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function formatDate(event: Event): string {
@@ -220,8 +211,6 @@ export function EventCard({ event }: { event: Event }) {
 
   const supplements = data ? getSupplements(event, data.enrichment_found) : null
   const hasSupplements = supplements && Object.values(supplements).some(Boolean)
-  const hasVerifications = (data?.verifications?.length ?? 0) > 0
-  const showFoundOnline = !isMinimal && (hasSupplements || hasVerifications)
 
   return (
     <div className="rounded-sm overflow-hidden bg-surface-card">
@@ -364,68 +353,36 @@ export function EventCard({ event }: { event: Event }) {
                   <p className="text-xs text-content-muted">No active boards on file.</p>
                 ) : null}
 
-                {/* FOUND ONLINE
-                    Never shown for minimal events — enrichment is suppressed for them.
-                    Shows supplementary values first, then source attribution. */}
-                {showFoundOnline && (
-                  <div>
-                    <p className="text-xs font-mono tracking-wider text-content-muted mb-2">
-                      FOUND ONLINE
-                    </p>
-
-                    {/* Supplementary field values */}
-                    {hasSupplements && (
-                      <div className="space-y-1.5 mb-3">
-                        {supplements!.date && (
-                          <p className="text-sm text-content-secondary">
-                            {supplements!.date}
-                          </p>
-                        )}
-                        {supplements!.address && (
-                          <p className="text-sm text-content-secondary">
-                            {supplements!.address}
-                          </p>
-                        )}
-                        {supplements!.description && (
-                          <p className="text-sm leading-relaxed text-content-muted">
-                            {supplements!.description}
-                          </p>
-                        )}
-                        {supplements!.link && (
-                          <a
-                            href={supplements!.link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block text-xs"
-                            style={{ color: accentColor }}
-                          >
-                            {sourceDomain(supplements!.link)} →
-                          </a>
-                        )}
-                      </div>
+                {/* Found values — only what's missing from the flyer.
+                    No source list; the information speaks for itself.
+                    Never shown for minimal events. */}
+                {!isMinimal && hasSupplements && (
+                  <div className="space-y-1.5">
+                    {supplements!.date && (
+                      <p className="text-sm text-content-secondary">
+                        {supplements!.date}
+                      </p>
                     )}
-
-                    {/* Source attribution */}
-                    {hasVerifications && (
-                      <ul className="space-y-1.5">
-                        {data!.verifications.map((v, i) => (
-                          <li key={i} className="text-xs text-content-muted">
-                            <a
-                              href={v.source_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-content-secondary underline-offset-2 hover:underline"
-                            >
-                              {sourceDomain(v.source_url)}
-                            </a>
-                            {' · '}
-                            {SOURCE_LABELS[v.source_type] ?? v.source_type}
-                            {v.confirmed.length > 0 && (
-                              <> · {v.confirmed.join(', ')}</>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
+                    {supplements!.address && (
+                      <p className="text-sm text-content-secondary">
+                        {supplements!.address}
+                      </p>
+                    )}
+                    {supplements!.description && (
+                      <p className="text-sm leading-relaxed text-content-muted">
+                        {supplements!.description}
+                      </p>
+                    )}
+                    {supplements!.link && (
+                      <a
+                        href={supplements!.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block text-xs"
+                        style={{ color: accentColor }}
+                      >
+                        {sourceDomain(supplements!.link)} →
+                      </a>
                     )}
                   </div>
                 )}
