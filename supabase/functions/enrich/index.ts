@@ -13,6 +13,9 @@
 //   - Never fill location_address for minimal events (enforced by the above)
 //   - contact field: public URLs only, no personal phone/email
 //   - Non-null wins: only fill fields that are currently null on the event
+//   - Geo validation: if a found location_address doesn't match the board's
+//     city/region, suppress it AND suppress date/time fields — they belong
+//     to a different show (e.g. a touring artist's show in another city)
 //   - One event_verifications row per web source found
 //   - DB trigger handles confidence recomputation after each insert
 
@@ -89,6 +92,16 @@ interface UserLocation {
   country?: string;
 }
 
+// Bundles the board's raw coordinates with the derived UserLocation.
+// Both travel together through the pipeline so processEvent has access
+// to coords for future geocoded-result haversine validation, and
+// userLocation for the web_search tool's user_location hint and city
+// constraint in the enrichment prompt.
+interface LocationContext {
+  coords: Coords;
+  userLocation: UserLocation | null;
+}
+
 interface BoardLocation {
   board_id: string;
   coords: Coords;
@@ -145,13 +158,13 @@ function isPersonalContact(value: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// GeoJSON point parser
-//
+// Geo helpers
+// ---------------------------------------------------------------------------
+
+// GeoJSON point parser.
 // Supabase/PostgREST returns GEOGRAPHY(POINT) as GeoJSON:
 //   { "type": "Point", "coordinates": [lng, lat] }
 // Note: GeoJSON coordinate order is [longitude, latitude].
-// ---------------------------------------------------------------------------
-
 function parseGeoPoint(raw: unknown): Coords | null {
   if (!raw) return null;
   try {
@@ -164,6 +177,41 @@ function parseGeoPoint(raw: unknown): Coords | null {
     // malformed
   }
   return null;
+}
+
+// Haversine distance in kilometres between two coordinate pairs.
+// Available for future use when geocoding found addresses to validate
+// distance against the board's coords (rather than city string matching).
+function haversineKm(a: Coords, b: Coords): number {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h =
+    sinLat * sinLat +
+    Math.cos((a.lat * Math.PI) / 180) *
+      Math.cos((b.lat * Math.PI) / 180) *
+      sinLng * sinLng;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// City/region string match against a found address string.
+// Used to gate location_address (and date/time) promotion when a
+// web result may be for a different city — e.g. a touring artist's
+// show in Ohio surfacing when the board is in Olympia, WA.
+// Falls back to true (permissive) when no city is known, so events
+// without board geo data are still enriched rather than silently skipped.
+function addressMatchesCity(
+  address: string,
+  city: string | undefined,
+  region: string | undefined
+): boolean {
+  if (!city && !region) return true; // no reference point — allow
+  const addr = address.toLowerCase();
+  if (city && addr.includes(city.toLowerCase())) return true;
+  if (region && addr.includes(region.toLowerCase())) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,20 +316,25 @@ async function saveBoardGeo(
   }
 }
 
-async function resolveUserLocation(
+// Returns coords + userLocation together so processEvent has both available.
+// coords: for future haversine validation against geocoded result addresses.
+// userLocation: for the web_search tool hint and the city constraint in the prompt.
+async function resolveLocationContext(
   supabase: SupabaseClient,
   eventId: string
-): Promise<UserLocation | null> {
+): Promise<LocationContext | null> {
   const boardLoc = await getBoardLocation(supabase, eventId);
   if (!boardLoc) return null;
 
   // Cache hit — no Nominatim call needed.
-  if (boardLoc.userLocation) return boardLoc.userLocation;
+  if (boardLoc.userLocation) {
+    return { coords: boardLoc.coords, userLocation: boardLoc.userLocation };
+  }
 
   // Cache miss — reverse geocode and save for next time.
   const geo = await reverseGeocode(boardLoc.coords);
   if (geo) await saveBoardGeo(supabase, boardLoc.board_id, geo);
-  return geo;
+  return { coords: boardLoc.coords, userLocation: geo };
 }
 
 // ---------------------------------------------------------------------------
@@ -296,6 +349,9 @@ Search the web to find any missing details — full dates, venue address, event 
 CRITICAL RULES:
 - Only report information confirmed by a web source. Never guess or invent.
 - null is always better than wrong.
+- LOCATION CONSTRAINT: the board location is included in the input. Only return results
+  for events in that city/region. A touring artist may have many shows listed online —
+  find the one in the board's city, not a show in another state.
 - contact field: public-facing URLs ONLY — venue website, org booking page, org website.
   NEVER personal mobile numbers. NEVER personal email addresses. If you find only personal
   contacts, leave contact null.
@@ -337,9 +393,22 @@ If you find nothing useful after searching, return: {"found": {}, "sources": []}
 
 async function callEnrichmentApi(
   event: EventRow,
-  userLocation: UserLocation | null
+  locationCtx: LocationContext | null
 ): Promise<EnrichmentResult | null> {
-  const knownLines: string[] = [`Name: ${event.name}`];
+  const userLocation = locationCtx?.userLocation ?? null;
+  const knownLines: string[] = [];
+
+  // Board location comes first so it reads as the authoritative constraint
+  // before the event details. Claude sees it as "search for this event
+  // in this place" rather than "search for this event, oh and by the way".
+  if (userLocation?.city) {
+    const loc = [userLocation.city, userLocation.region, userLocation.country]
+      .filter(Boolean)
+      .join(", ");
+    knownLines.push(`Board location: ${loc} — only return results for events in this area`);
+  }
+
+  knownLines.push(`Name: ${event.name}`);
   if (event.organization_name) knownLines.push(`Organizer: ${event.organization_name}`);
   if (event.date_start) knownLines.push(`Date: already known — ${event.date_start}`);
   else if (event.date_raw) knownLines.push(`Date (as written on flyer): ${event.date_raw}`);
@@ -452,9 +521,9 @@ async function markAttempted(supabase: SupabaseClient, eventId: string): Promise
 async function processEvent(
   supabase: SupabaseClient,
   event: EventRow,
-  userLocation: UserLocation | null
+  locationCtx: LocationContext | null
 ): Promise<"enriched" | "skipped" | "failed"> {
-  const result = await callEnrichmentApi(event, userLocation);
+  const result = await callEnrichmentApi(event, locationCtx);
 
   // Mark attempted regardless of outcome — prevents retry storms on events
   // with no web footprint. extract resets this when a new sighting arrives.
@@ -477,15 +546,47 @@ async function processEvent(
   const updates: Record<string, unknown> = {};
   const f = result.found;
 
+  // Geo validation for location_address.
+  //
+  // A web search for a touring artist or recurring event name can surface
+  // results for a different city — same act, different show. We catch this
+  // by checking the found address against the board's city/region.
+  //
+  // If the address doesn't match, we also suppress date and time fields:
+  // they came from the same wrong-city show and are equally invalid.
+  //
+  // Note: haversineKm is available here via locationCtx.coords for future
+  // use if we add geocoding of found addresses, which would give us a more
+  // robust distance check than city string matching.
+  if (!event.location_address && f.location_address && event.flyer_style !== "minimal") {
+    const userLocation = locationCtx?.userLocation;
+    const cityMatch = addressMatchesCity(
+      f.location_address,
+      userLocation?.city,
+      userLocation?.region
+    );
+
+    if (cityMatch) {
+      updates.location_address = f.location_address;
+    } else {
+      console.warn(
+        `enrich: geo mismatch for event ${event.id} ("${event.name}") — ` +
+        `found address "${f.location_address}" does not match board location ` +
+        `"${userLocation?.city ?? "unknown"}, ${userLocation?.region ?? ""}". ` +
+        `Suppressing location_address, date_start, time_start, time_end.`
+      );
+      // Null these out so the field promotion below skips them.
+      f.date_start = null;
+      f.time_start = null;
+      f.time_end = null;
+      f.date_end = null;
+    }
+  }
+
   if (!event.date_start && f.date_start) updates.date_start = f.date_start;
   if (!event.date_end && f.date_end) updates.date_end = f.date_end;
   if (!event.time_start && f.time_start) updates.time_start = f.time_start;
   if (!event.time_end && f.time_end) updates.time_end = f.time_end;
-  // Belt-and-suspenders: never fill location_address for minimal flyers,
-  // even though they're filtered out by fetchEventsNeedingEnrichment.
-  if (!event.location_address && f.location_address && event.flyer_style !== "minimal") {
-    updates.location_address = f.location_address;
-  }
   if (!event.event_url && f.event_url) updates.event_url = f.event_url;
   if (!event.contact && f.contact && !isPersonalContact(f.contact)) {
     updates.contact = f.contact;
@@ -600,8 +701,8 @@ Deno.serve(async (req: Request) => {
   const counts = { enriched: 0, skipped: 0, failed: 0 };
 
   for (const event of events) {
-    const userLocation = await resolveUserLocation(supabase, event.id);
-    const outcome = await processEvent(supabase, event, userLocation);
+    const locationCtx = await resolveLocationContext(supabase, event.id);
+    const outcome = await processEvent(supabase, event, locationCtx);
     counts[outcome]++;
   }
 
