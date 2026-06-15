@@ -154,6 +154,40 @@ function respond(body: unknown, status = 200) {
   });
 }
 
+// Reverse geocodes a board location at street level (zoom=17).
+// Populates both the human-readable description ("4th Ave E, Olympia")
+// and the city/region/country cache used by the enrich function.
+// Non-blocking — if Nominatim fails, board is created without description.
+async function reverseGeocodeBoard(lat: number, lng: number): Promise<{
+  description: string | null
+  geo_city: string | null
+  geo_region: string | null
+  geo_country: string | null
+} | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=17`,
+      {
+        headers: {
+          "User-Agent": "PostersUp/1.0 (postersup.org)",
+          "Accept-Language": "en",
+        },
+      }
+    )
+    if (!res.ok) return null
+    const data = await res.json()
+    const addr = data?.address ?? {}
+    const road    = addr.road ?? addr.pedestrian ?? addr.path ?? null
+    const city    = addr.city ?? addr.town ?? addr.village ?? null
+    const region  = addr.state ?? null
+    const country = addr.country_code?.toUpperCase() ?? null
+    const description = [road, city].filter(Boolean).join(", ") || null
+    return { description, geo_city: city, geo_region: region, geo_country: country }
+  } catch {
+    return null
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -267,19 +301,28 @@ Deno.serve(async (req) => {
     } else if (nearby && nearby.length > 0) {
       resolvedBoardId = nearby[0].id;
       console.log("Found existing board:", resolvedBoardId);
+    // AFTER:
     } else {
+      const geo = await reverseGeocodeBoard(lat, lng)
+
       const { data: newBoard, error: boardError } = await supabase
         .from("boards")
-        .insert({ geolocation: `SRID=4326;POINT(${lng} ${lat})` })
+        .insert({
+          geolocation: `SRID=4326;POINT(${lng} ${lat})`,
+          description:  geo?.description  ?? null,
+          geo_city:     geo?.geo_city     ?? null,
+          geo_region:   geo?.geo_region   ?? null,
+          geo_country:  geo?.geo_country  ?? null,
+        })
         .select("id")
-        .single();
+        .single()
 
       if (boardError) {
-        warnings.push(`Board creation failed: ${boardError.message}`);
-        console.error("Board insert error:", JSON.stringify(boardError));
+        warnings.push(`Board creation failed: ${boardError.message}`)
+        console.error("Board insert error:", JSON.stringify(boardError))
       } else {
-        resolvedBoardId = newBoard?.id ?? null;
-        console.log("Created new board:", resolvedBoardId);
+        resolvedBoardId = newBoard?.id ?? null
+        console.log("Created new board:", resolvedBoardId, "—", geo?.description ?? "no description")
       }
     }
   }
