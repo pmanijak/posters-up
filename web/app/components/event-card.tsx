@@ -1,5 +1,9 @@
-// app/components/event-card.tsx
+'use client'
+
+import { useState } from 'react'
 import { categoryColor, hexToRgba } from '@/lib/categories'
+
+// ── Types ──────────────────────────────────────────────────────────────────
 
 interface TalentEntry {
   id: string
@@ -41,6 +45,45 @@ interface Event {
   talent: TalentEntry[]
 }
 
+interface BoardLocation {
+  board_id: string
+  board_description: string | null
+  board_type: string | null
+  last_seen_at: string
+}
+
+interface Verification {
+  source_url: string
+  source_type: string
+  confirmed: string[]
+}
+
+interface EnrichmentFound {
+  date_start: string | null
+  time_start: string | null
+  location_address: string | null
+  event_url: string | null
+  contact: string | null
+  description: string | null
+}
+
+interface TellMeMoreData {
+  boards: BoardLocation[]
+  verifications: Verification[]
+  enrichment_found: EnrichmentFound | null
+}
+
+// ── Constants ──────────────────────────────────────────────────────────────
+
+const SOURCE_LABELS: Record<string, string> = {
+  venue_website: 'venue website',
+  org_website: 'organizer',
+  local_calendar: 'local calendar',
+  ticketing: 'tickets',
+  news: 'local news',
+  social: 'social media',
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function formatDate(event: Event): string {
@@ -50,7 +93,6 @@ function formatDate(event: Event): string {
     const dateStr = date
       .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
       .toUpperCase()
-
     if (event.time_start) {
       const [h, m] = event.time_start.split(':').map(Number)
       const ampm = h >= 12 ? 'PM' : 'AM'
@@ -60,16 +102,38 @@ function formatDate(event: Event): string {
     }
     return dateStr
   }
-
   if (event.date_raw) return event.date_raw.toUpperCase()
   return 'DATE TBD'
 }
 
-function lastSeen(iso: string): string {
+function formatFoundDate(dateStr: string, timeStr?: string | null): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  const datePart = date.toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+  })
+  if (timeStr) {
+    const [h, m] = timeStr.split(':').map(Number)
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    const hour = h > 12 ? h - 12 : h === 0 ? 12 : h
+    const timePart = m === 0
+      ? `${hour}${ampm}`
+      : `${hour}:${String(m).padStart(2, '0')}${ampm}`
+    return `${datePart} · ${timePart}`
+  }
+  return datePart
+}
+
+function seenAgo(iso: string): string {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
   if (days === 0) return 'seen today'
   if (days === 1) return 'seen yesterday'
   return `seen ${days}d ago`
+}
+
+function sourceDomain(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, '') }
+  catch { return url }
 }
 
 function formatTalent(talent: TalentEntry[]): string | null {
@@ -77,9 +141,58 @@ function formatTalent(talent: TalentEntry[]): string | null {
   return talent.map((t) => t.name).join(' · ')
 }
 
+async function fetchTellMeMore(eventId: string): Promise<TellMeMoreData> {
+  try {
+    const res = await fetch(`/api/events/${eventId}/tell-me-more`)
+    if (!res.ok) return { boards: [], verifications: [], enrichment_found: null }
+    return await res.json()
+  } catch {
+    return { boards: [], verifications: [], enrichment_found: null }
+  }
+}
+
+// ── Found supplement helpers ───────────────────────────────────────────────
+//
+// Only surface enrichment values that add something the flyer didn't have.
+// If the flyer already has a date, showing the web-found date is redundant.
+// If the flyer had no address but we found one, that's genuinely useful.
+
+interface Supplements {
+  date: string | null
+  address: string | null
+  description: string | null
+  link: string | null  // event_url ?? contact from enrichment
+}
+
+function getSupplements(event: Event, found: EnrichmentFound | null): Supplements {
+  if (!found) return { date: null, address: null, description: null, link: null }
+
+  return {
+    // Date: only when the flyer didn't have a specific date
+    date: event.date_type !== 'specific' && found.date_start
+      ? formatFoundDate(found.date_start, found.time_start)
+      : null,
+
+    // Address: only when the flyer had none
+    address: !event.location_address ? found.location_address : null,
+
+    // Description: only when the flyer had none
+    description: !event.description ? found.description : null,
+
+    // Link: only when the event record has no external link already
+    link: !(event.event_url ?? event.contact)
+      ? (found.event_url ?? found.contact)
+      : null,
+  }
+}
+
 // ── Card ───────────────────────────────────────────────────────────────────
 
 export function EventCard({ event }: { event: Event }) {
+  const [expanded, setExpanded] = useState(false)
+  const [data, setData] = useState<TellMeMoreData | null>(null)
+  const [loading, setLoading] = useState(false)
+
   const isMinimal = event.flyer_style === 'minimal'
   const accentColor = categoryColor(event.event_category)
   const talentStr = formatTalent(event.talent ?? [])
@@ -96,6 +209,20 @@ export function EventCard({ event }: { event: Event }) {
     ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
     : null
 
+  async function handleToggle() {
+    if (!expanded && data === null) {
+      setLoading(true)
+      setData(await fetchTellMeMore(event.id))
+      setLoading(false)
+    }
+    setExpanded((v) => !v)
+  }
+
+  const supplements = data ? getSupplements(event, data.enrichment_found) : null
+  const hasSupplements = supplements && Object.values(supplements).some(Boolean)
+  const hasVerifications = (data?.verifications?.length ?? 0) > 0
+  const showFoundOnline = !isMinimal && (hasSupplements || hasVerifications)
+
   return (
     <div className="rounded-sm overflow-hidden bg-surface-card">
       <div className="px-4 py-3">
@@ -108,17 +235,14 @@ export function EventCard({ event }: { event: Event }) {
           {event.event_category && (
             <span
               className="text-xs shrink-0 font-medium px-2 py-0.5 rounded"
-              style={{
-                color: accentColor,
-                background: hexToRgba(accentColor, 0.15),
-              }}
+              style={{ color: accentColor, background: hexToRgba(accentColor, 0.15) }}
             >
               {event.event_category.replace('_', ' ')}
             </span>
           )}
         </div>
 
-        {/* Name — accent color */}
+        {/* Name */}
         <h2
           className="font-bold leading-snug mb-1"
           style={{ fontFamily: 'Georgia, serif', fontSize: '1.05rem', color: accentColor }}
@@ -128,9 +252,7 @@ export function EventCard({ event }: { event: Event }) {
 
         {/* Talent */}
         {talentStr && (
-          <p className="text-sm mb-1 text-content-secondary">
-            {talentStr}
-          </p>
+          <p className="text-sm mb-1 text-content-secondary">{talentStr}</p>
         )}
 
         {/* Location */}
@@ -138,7 +260,7 @@ export function EventCard({ event }: { event: Event }) {
           <p className="text-sm text-content-muted">
             {location}
             {event.location_address && !event.venue_name && (
-              <span className="text-content-muted"> · {event.location_address}</span>
+              <span> · {event.location_address}</span>
             )}
           </p>
         )}
@@ -150,14 +272,14 @@ export function EventCard({ event }: { event: Event }) {
           </p>
         )}
 
-        {/* Minimal: show description only if it's all we have */}
+        {/* Minimal: show description only if it's literally all we have */}
         {isMinimal && event.description && !location && !talentStr && (
           <p className="text-sm mt-1 leading-relaxed text-content-muted">
             {event.description}
           </p>
         )}
 
-        {/* Details row: price, age, org */}
+        {/* Details row */}
         {detailParts.length > 0 && (
           <p className="text-sm mt-1.5 text-content-muted">
             {detailParts.join(' · ')}
@@ -193,22 +315,138 @@ export function EventCard({ event }: { event: Event }) {
               </span>
             )}
             <span className="text-xs text-content-muted">
-              {lastSeen(event.last_sighted_at)}
+              {seenAgo(event.last_sighted_at)}
             </span>
           </div>
-
-          {linkHref && (
-            <a
-              href={linkHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs"
-              style={{ color: accentColor }}
-            >
-              Details →
-            </a>
-          )}
+          <button
+            onClick={handleToggle}
+            className="text-xs"
+            style={{ color: accentColor }}
+          >
+            {expanded ? 'Less ↑' : 'Tell me more ↓'}
+          </button>
         </div>
+
+        {/* ── Expansion ───────────────────────────────────────────────── */}
+        {expanded && (
+          <div className="mt-3 pt-3 border-t border-edge space-y-4">
+            {loading ? (
+              <p className="text-xs text-content-muted">Loading…</p>
+            ) : (
+              <>
+                {/* SPOTTED AT
+                    Primary answer for minimal events — the board has what the
+                    flyer intentionally left out. Secondary context for others. */}
+                {data && data.boards.length > 0 ? (
+                  <div>
+                    <p className="text-xs font-mono tracking-wider text-content-muted mb-2">
+                      SPOTTED AT
+                    </p>
+                    <ul className="space-y-2">
+                      {data.boards.map((b) => (
+                        <li key={b.board_id} className="flex items-baseline justify-between gap-4">
+                          <span className="text-sm text-content-secondary">
+                            {b.board_description ?? b.board_type ?? 'Community board'}
+                          </span>
+                          <span className="text-xs text-content-muted shrink-0">
+                            {seenAgo(b.last_seen_at)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {isMinimal && (
+                      <p className="text-xs text-content-muted mt-2">
+                        This flyer is intentionally minimal — the board will have more.
+                      </p>
+                    )}
+                  </div>
+                ) : data ? (
+                  <p className="text-xs text-content-muted">No active boards on file.</p>
+                ) : null}
+
+                {/* FOUND ONLINE
+                    Never shown for minimal events — enrichment is suppressed for them.
+                    Shows supplementary values first, then source attribution. */}
+                {showFoundOnline && (
+                  <div>
+                    <p className="text-xs font-mono tracking-wider text-content-muted mb-2">
+                      FOUND ONLINE
+                    </p>
+
+                    {/* Supplementary field values */}
+                    {hasSupplements && (
+                      <div className="space-y-1.5 mb-3">
+                        {supplements!.date && (
+                          <p className="text-sm text-content-secondary">
+                            {supplements!.date}
+                          </p>
+                        )}
+                        {supplements!.address && (
+                          <p className="text-sm text-content-secondary">
+                            {supplements!.address}
+                          </p>
+                        )}
+                        {supplements!.description && (
+                          <p className="text-sm leading-relaxed text-content-muted">
+                            {supplements!.description}
+                          </p>
+                        )}
+                        {supplements!.link && (
+                          <a
+                            href={supplements!.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block text-xs"
+                            style={{ color: accentColor }}
+                          >
+                            {sourceDomain(supplements!.link)} →
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Source attribution */}
+                    {hasVerifications && (
+                      <ul className="space-y-1.5">
+                        {data!.verifications.map((v, i) => (
+                          <li key={i} className="text-xs text-content-muted">
+                            <a
+                              href={v.source_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-content-secondary underline-offset-2 hover:underline"
+                            >
+                              {sourceDomain(v.source_url)}
+                            </a>
+                            {' · '}
+                            {SOURCE_LABELS[v.source_type] ?? v.source_type}
+                            {v.confirmed.length > 0 && (
+                              <> · {v.confirmed.join(', ')}</>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {/* Flyer's own external link — shown last when present */}
+                {linkHref && (
+                  <a
+                    href={linkHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block text-xs"
+                    style={{ color: accentColor }}
+                  >
+                    More info →
+                  </a>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
       </div>
     </div>
   )
