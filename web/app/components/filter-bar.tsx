@@ -15,7 +15,7 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
   const updateFilter = useCallback(
     (key: string, value: string) => {
       const params = new URLSearchParams(searchParams.toString())
-      if (value === 'all') {
+      if (value === 'all' || value === '') {
         params.delete(key)
       } else {
         params.set(key, value)
@@ -33,7 +33,6 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
             ? !activeCategory || activeCategory === 'all'
             : activeCategory === cat.value
         const color = categoryColor(cat.value)
-
         return (
           <button
             key={cat.value}
@@ -47,10 +46,10 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
                     border: `1px solid ${hexToRgba(color, 0.3)}`,
                   }
                 : {
-                  color: 'var(--color-content-secondary)',
-                  background: 'transparent',
-                  border: '1px solid var(--color-content-muted)',
-                }
+                    color: 'var(--color-content-secondary)',
+                    background: 'transparent',
+                    border: '1px solid var(--color-content-muted)',
+                  }
             }
           >
             {cat.label}

@@ -2,6 +2,7 @@
 import { Suspense } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { FilterBar } from './components/filter-bar'
+import { SearchInput } from './components/search-input'
 import { EventCard } from './components/event-card'
 
 const supabase = createClient(
@@ -11,6 +12,7 @@ const supabase = createClient(
 
 interface SearchParams {
   category?: string
+  q?: string
 }
 
 export default async function DiscoverPage({
@@ -18,7 +20,7 @@ export default async function DiscoverPage({
 }: {
   searchParams: Promise<SearchParams>
 }) {
-  const { category } = await searchParams
+  const { category, q } = await searchParams
   const today = new Date().toISOString().split('T')[0]
   const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
     .toISOString()
@@ -31,8 +33,13 @@ export default async function DiscoverPage({
       `and(date_start.gte.${today},date_start.lte.${thirtyDaysOut}),date_type.in.(recurring,approximate,unknown)`
     )
 
-  if (category && category !== 'all') {
+  // When search is active, category becomes a priority sort rather than a hard filter.
+  if (category && category !== 'all' && !q) {
     query = query.eq('event_category', category)
+  }
+
+  if (q) {
+    query = query.ilike('search_text', `%${q}%`)
   }
 
   const { data: events, error } = await query
@@ -43,14 +50,21 @@ export default async function DiscoverPage({
     console.error('events_public query failed:', error)
   }
 
-  const eventList = events ?? []
+  let eventList = events ?? []
+
+  if (q && category && category !== 'all') {
+    eventList = [
+      ...eventList.filter(e => e.event_category === category),
+      ...eventList.filter(e => e.event_category !== category),
+    ]
+  }
 
   return (
     <div className="min-h-screen bg-surface-page">
 
       {/* Header */}
-      <header className="border-b border-edge">
-        <div className="max-w-2xl mx-auto px-4 py-6">
+      <header>
+        <div className="max-w-2xl mx-auto px-4 pt-3">
           <div className="flex items-baseline justify-between">
             <div>
               <h1 className="font-marker text-3xl text-content-primary">
@@ -70,9 +84,9 @@ export default async function DiscoverPage({
         </div>
       </header>
 
-      {/* Filters */}
-      <div className="sticky top-0 z-10 border-b border-edge bg-surface-page">
-        <div className="max-w-2xl mx-auto px-4 py-3">
+      {/* Category chips — sticky */}
+      <div className="sticky top-0 z-10 bg-surface-page">
+        <div className="max-w-2xl mx-auto px-4 pt-6 pb-3">
           <Suspense fallback={null}>
             <FilterBar activeCategory={category} />
           </Suspense>
@@ -80,9 +94,16 @@ export default async function DiscoverPage({
       </div>
 
       {/* Event list */}
-      <main className="max-w-2xl mx-auto px-4 py-6">
+      <main className="max-w-2xl mx-auto px-4">
+        {/* Search — sits right above the events */}
+        <div className="my-3">
+          <Suspense fallback={null}>
+            <SearchInput activeQuery={q} />
+          </Suspense>
+        </div>
+
         {eventList.length === 0 ? (
-          <EmptyState category={category} />
+          <EmptyState category={category} q={q} />
         ) : (
           <div className="space-y-3">
             {eventList.map((event) => (
@@ -90,26 +111,38 @@ export default async function DiscoverPage({
             ))}
             <p className="text-center text-xs pt-4 text-content-muted">
               {eventList.length} event{eventList.length !== 1 ? 's' : ''}
-              {category && category !== 'all' ? ` · ${category}` : ''}
+              {!q && category && category !== 'all' ? ` · ${category}` : ''}
+              {q ? ` · "${q}"` : ''}
             </p>
           </div>
         )}
       </main>
+
     </div>
   )
 }
 
-function EmptyState({ category }: { category?: string }) {
+function EmptyState({ category, q }: { category?: string; q?: string }) {
   return (
     <div className="text-center py-16">
       <p className="text-lg mb-2 font-marker text-content-primary">
         No events found
       </p>
       <p className="text-sm text-content-muted">
-        {category && category !== 'all'
+        {q
+          ? `Nothing matching "${q}". Try different words or clear the search.`
+          : category && category !== 'all'
           ? `No ${category} events coming up. Try a different category.`
           : 'Nothing here yet — submit a photo to get started.'}
       </p>
+      {category && category !== 'all' && !q ? (
+        <a
+          href="/"
+          className="text-sm mt-3 inline-block text-content-secondary underline underline-offset-2"
+        >
+          See all events
+        </a>
+      ) : null}
     </div>
   )
 }
