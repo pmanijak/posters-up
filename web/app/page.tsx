@@ -52,6 +52,25 @@ export default async function DiscoverPage({
 
   let eventList = events ?? []
 
+  const DATE_TYPE_PRIORITY: Record<string, number> = {
+    specific:    0,
+    recurring:   1,
+    approximate: 2,
+    unknown:     3,
+  }
+
+  // Sort: specific upcoming events first by date, then recurring, approximate, unknown
+  eventList = [...eventList].sort((a, b) => {
+    const pa = DATE_TYPE_PRIORITY[a.date_type] ?? 3
+    const pb = DATE_TYPE_PRIORITY[b.date_type] ?? 3
+    if (pa !== pb) return pa - pb
+    if (!a.date_start && !b.date_start) return 0
+    if (!a.date_start) return 1
+    if (!b.date_start) return -1
+    return a.date_start.localeCompare(b.date_start)
+  })
+
+  // Category priority sort when search is active (replaces the filter block below)
   if (q && category && category !== 'all') {
     eventList = [
       ...eventList.filter(e => e.event_category === category),
