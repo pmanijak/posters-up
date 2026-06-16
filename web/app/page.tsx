@@ -43,8 +43,7 @@ export default async function DiscoverPage({
   }
 
   const { data: events, error } = await query
-    .order('date_start', { ascending: true, nullsFirst: false })
-    .limit(100)
+    .limit(500)
 
   if (error) {
     console.error('events_public query failed:', error)
