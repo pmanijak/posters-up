@@ -191,6 +191,8 @@ export function EventCard({ event }: { event: Event }) {
     ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
     : null
 
+  const hasSomethingToShow = linkHref !== null 
+
   function tagHref(tag: string): string {
     const params = new URLSearchParams(searchParams.toString())
     params.set('q', tag)
@@ -314,13 +316,15 @@ export function EventCard({ event }: { event: Event }) {
               {seenAgo(event.last_sighted_at)}
             </span>
           </div>
-          <button
-            onClick={handleToggle}
-            className="text-xs"
-            style={{ color: accentColor }}
-          >
-            {expanded ? 'Less ↑' : 'Tell me more ↓'}
-          </button>
+          {hasSomethingToShow && (
+            <button
+              type="button"
+              onClick={handleToggle}
+              className="text-xs text-content-muted"
+            >
+              {expanded ? 'Less ↑' : 'Find this poster ↓'}
+            </button>
+          )}
         </div>
 
         {/* ── Expansion ───────────────────────────────────────────────── */}
