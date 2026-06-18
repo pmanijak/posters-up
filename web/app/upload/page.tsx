@@ -198,7 +198,9 @@ export default function UploadPage() {
       <header className="border-b border-edge">
         <div className="max-w-2xl mx-auto px-4 py-6 flex items-baseline justify-between">
           <div>
-            <h1 className="font-marker text-3xl text-content-primary">Posters Up</h1>
+            <h1 className="font-marker text-3xl text-content-primary">
+              <Link href="/">Posters Up</Link>
+            </h1>
             <p className="text-sm mt-0.5 text-content-muted">Submit a bulletin board photo</p>
           </div>
           <div className="flex items-center gap-4">
