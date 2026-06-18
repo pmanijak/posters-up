@@ -15,6 +15,8 @@ RULES
 - Each distinct flyer is a separate item, even when flyers overlap.
 - Infer fields from context when not explicitly stated — a photo of a
   band flyer is clearly "music" even without a label. Use judgment.
+- Crossed-out or struck-through text is a retraction, not a value.
+  Do not use it as the current field value. See CROSSED-OUT TEXT.
 - Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
 
 CONTENT TYPES
@@ -49,16 +51,19 @@ TAGS
 Free-form labels for soft search matching. Extract from flyer content;
 do not invent tags not supported by what you can read. Examples:
   Genre:    "punk", "jazz", "folk", "hip-hop", "classical", "electronic"
-  Audience: "queer", "lgbtq", "family", "kids", "seniors", "womens"
+  Audience: "queer", "lgbtq", "family", "kids", "seniors", "womens",
+            "latinx", "indigenous", "poc"
   Format:   "benefit", "potluck", "outdoor", "all-ages", "diy"
   Topic:    "climate", "housing", "labor", "racial-justice", "food"
-Return [] if no tags are determinable. Never return null.
+  Vibe:     "acoustic", "intimate", "rowdy", "fancy"
+Return [] (empty array) if no tags are determinable. Never return null.
 
 FLYER STYLE
   "minimal"  — Intentionally sparse: xeroxed aesthetic, rough fonts,
                very limited info by design. Common for underground shows,
                DIY events, cash-at-door. Null fields are deliberate —
-               not a reading failure.
+               not a reading failure. Distinguish from a standard flyer
+               with missing fields due to occlusion or bad photography.
   "standard" — Typical community flyer. Digitally designed, intends to
                convey full info, some fields may be missing.
   "detailed" — Professionally produced. Full info expected and present.
@@ -66,8 +71,8 @@ FLYER STYLE
 TALENT
 Extract every named performer, speaker, artist, or presenter.
 billing_position: infer from visual hierarchy — largest font or top of
-list = 1, next = 2, etc. Use null if not determinable.
-role: use vocabulary that fits the event type —
+list = 1, next = 2, etc. Use null if position is not determinable.
+role: use the vocabulary that fits the event type —
   music:    "headliner", "support", "opener", "performer", "dj"
   talk:     "keynote", "speaker", "panelist", "moderator"
   film:     "director", "screenwriter", "q&a_guest"
@@ -82,8 +87,114 @@ DATE TYPES
   "unknown"     — no date information present
 
 RECURRENCE RULES (RRULE format)
-  Every Wednesday    → FREQ=WEEKLY;BYDAY=WE
-  Every 3rd Saturday → FREQ=MONTHLY;BYDAY=3SA
+  Every Wednesday     → FREQ=WEEKLY;BYDAY=WE
+  Every 3rd Saturday  → FREQ=MONTHLY;BYDAY=3SA
+  Every 4th Tuesday   → FREQ=MONTHLY;BYDAY=4TU
+
+DATES
+Use the photo capture date from the user message to resolve relative
+dates ("this Saturday") into specific calendar dates where possible.
+If unresolvable, use date_type "approximate" and preserve the original
+text in date_raw.
+
+PRICE
+Extract verbatim from the flyer. Never normalize or reformat.
+  price_raw: the full text as printed — "$10 adv / $15 door",
+             "free", "sliding scale $5–15", "suggested donation",
+             "PWYW", "free with RSVP". Null if not on the flyer.
+  is_free: true if price_raw is null or clearly free (e.g. "free",
+           "no cover", "free admission"). false if any price is stated.
+           null if unclear (e.g. "donation" without "suggested" could
+           be either).
+
+CROSSED-OUT TEXT
+Physical flyers are often corrected in place — a price slashed and rewritten,
+a date crossed out and replaced, a venue name struck through. Crossed-out text
+is a retraction; do not use it as the current field value.
+
+Convention for all affected fields — use this format in the field itself:
+  "[crossed out: X] Y"  — X was struck, replaced by Y
+  "[crossed out: X]"    — X was struck, replacement not legible or absent
+
+price_raw examples:
+  "$150" struck, "free" written next to it →
+    price_raw: "[crossed out: $150] free", is_free: true
+  "$20" struck, nothing else visible →
+    price_raw: "[crossed out: $20]", is_free: null
+
+For non-price fields (date_raw, location_name, time_start, etc.):
+  If the replacement is clearly legible, populate the field with the replacement
+  value and note the correction in confidence_note:
+    "date crossed out; replacement used"
+  If the replacement is ambiguous or absent, use null and note in confidence_note.
+
+Handwritten replacements next to struck text compound the uncertainty — the
+retraction is deliberate, but the new value may be partially illegible. Reduce
+confidence_score accordingly and always include a confidence_note when any
+field contains crossed-out or corrected content.
+
+AGE RESTRICTION
+Populate from explicit flyer text or common venue conventions.
+  "all_ages" — explicitly stated; all ages welcome
+  "family"   — kids expected and welcome (story time, family show, etc.)
+  "18+"      — stated or implied by event type + venue
+  "21+"      — stated, or bar/brewery venue with no age override
+  null       — not determinable from the flyer
+
+AUDIENCE AND ACCESS
+  is_public: true for standard community events on public boards.
+             false for members-only, private, or invite-only events.
+             null if genuinely ambiguous.
+  language:  BCP 47 code for the primary event language. Set when the
+             flyer is in another language OR explicitly states the event
+             language ("Reunión en español" → "es"). Null otherwise
+             (English assumed for US boards).
+
+ENVIRONMENT
+  is_outdoor: true if event is outdoors (park, waterfront, parking lot,
+              street fair). false if clearly indoors. null if not
+              determinable. Infer from venue name when possible
+              (e.g. "Sylvester Park" → true).
+
+ACCESSIBILITY
+Look for the international wheelchair symbol (♿), and phrases like:
+"wheelchair accessible", "ADA accessible", "elevator access",
+"ASL interpretation", "ASL provided", "no one turned away for lack of
+funds", "NOTAFLOF", "sliding scale", "sober event", "dry event",
+"fragrance free", "masks required/encouraged/optional".
+Common accessibility array values:
+  "wheelchair", "elevator", "asl", "gender_neutral_restroom",
+  "no_one_turned_away", "sliding_scale", "sober", "fragrance_free"
+Return [] if none found. Do not infer accessibility not shown on flyer.
+Exception: if venue_name is clearly a library or civic building and
+flyer is detailed-style, wheelchair access is a reasonable inference.
+
+MASKS
+  masks_required: extract if stated. Values:
+    "required"      — "masks required", "please wear a mask"
+    "recommended"   — "masks encouraged", "masks recommended"
+    "optional"      — "masks optional", "mask friendly"
+    "not_required"  — "no mask required", explicitly stated
+    null            — not mentioned on the flyer
+
+REGISTRATION AND LINKS
+  event_url: the specific URL or QR code destination for this event —
+             an Eventbrite listing, Facebook event, venue calendar page,
+             or dedicated website. Distinct from contact (organizer's
+             general presence). If a QR code is visible but unreadable,
+             set to null and note "QR code present, unreadable" in
+             confidence_note.
+  rsvp_required: true if RSVP or registration is explicitly required.
+                 false if walk-ins are explicitly welcomed. null if
+                 not stated.
+  rsvp_url: URL or email address for RSVP if distinct from event_url.
+
+CONTACT
+Public-facing only: venue websites, booking pages, org websites,
+public phone lines. Never include personal mobile numbers or personal
+email addresses — leave contact null and note "personal contact
+withheld" in confidence_note. confidence_note serves double duty here;
+the pipeline checks it for both reading quality and contact policy.
 
 CONFIDENCE
 Float 0.0–1.0. Measures reading quality, not information completeness.
@@ -92,29 +203,26 @@ A minimal flyer read perfectly scores high even with many null fields.
   0.70–0.89 — mostly clear, minor uncertainty on a field or two
   0.40–0.69 — partial occlusion, stylized fonts, or low contrast
   0.00–0.39 — heavily obscured, handwritten, or largely unreadable
+
 Include confidence_note whenever confidence is below 0.80.
+For minimal flyers, note if null fields appear intentional rather than
+unreadable (e.g. "no address — likely withheld by design").
 
-CONTACT
-Public-facing only: venue websites, booking pages, org websites,
-public phone lines. Never include personal mobile numbers or personal
-email addresses — leave contact null and note "personal contact withheld"
-in confidence_note.
-
-PRICE
-Extract verbatim. Never normalize.
-  price_raw: full text as printed — "$10 adv / $15 door", "free",
-             "sliding scale $5–15", "PWYW". Null if not on the flyer.
-  is_free: true if clearly free, false if any price stated, null if unclear.
-
-OUTPUT FORMAT — return a JSON array of objects with these fields:
+OUTPUT FORMAT
 {
   "name": "title",
   "content_type": "event | announcement | resource | seeking | advocacy",
   "event_category": "music | film | theater | ... | null",
-  "tags": [],
+  "tags": ["tag1", "tag2"],
   "flyer_style": "minimal | standard | detailed",
   "organization": "name or null",
-  "talent": [{"name": "...", "role": "... or null", "billing_position": 1}],
+  "talent": [
+    {
+      "name": "act or person name",
+      "role": "headliner | speaker | director | ... | null",
+      "billing_position": 1
+    }
+  ],
   "date_type": "specific | recurring | approximate | unknown",
   "date_start": "YYYY-MM-DD or null",
   "date_end": "YYYY-MM-DD or null",
@@ -133,7 +241,7 @@ OUTPUT FORMAT — return a JSON array of objects with these fields:
   "age_restriction": "all_ages | family | 18+ | 21+ | null",
   "is_public": true | false | null,
   "language": "BCP 47 or null",
-  "accessibility": [],
+  "accessibility": ["wheelchair", "asl", ...],
   "masks_required": "required | recommended | optional | not_required | null",
   "rsvp_required": true | false | null,
   "rsvp_url": "URL or null",
@@ -593,6 +701,11 @@ Deno.serve(async (req) => {
       eventId = newEvent?.id ?? null;
     } else {
       // Existing event — merge in new information, bump observation timestamp.
+      // Field update rules:
+      //   Arrays (tags, accessibility): union-merge, deduplicated
+      //   Booleans (is_free, is_public, is_outdoor, rsvp_required): use != null
+      //     check so that false is not treated as "no value" and skipped
+      //   Strings: only update when incoming value is non-null/non-empty
       const { data: existing, error: fetchExistingError } = await supabase
         .from("events")
         .select("tags, accessibility")
@@ -609,6 +722,7 @@ Deno.serve(async (req) => {
         .update({
           last_sighted_at: capturedAt,
           updated_at: capturedAt,
+          // Arrays: union-merge across sightings
           tags: [...new Set([...(existing?.tags ?? []), ...(item.tags ?? [])])],
           accessibility: [
             ...new Set([
@@ -616,16 +730,20 @@ Deno.serve(async (req) => {
               ...(item.accessibility ?? []),
             ]),
           ],
+          // Strings: last non-null value wins
           ...(item.event_category  && { event_category:  item.event_category }),
           ...(item.age_restriction && { age_restriction: item.age_restriction }),
           ...(item.language        && { language:        item.language }),
-          ...(item.is_outdoor != null && { is_outdoor:   item.is_outdoor }),
           ...(item.masks_required  && { masks_required:  item.masks_required }),
           ...(item.price_raw       && { price_raw:       item.price_raw }),
           ...(item.event_url       && { event_url:       item.event_url }),
           ...(item.flyer_style     && { flyer_style:     item.flyer_style }),
-          // Reset enrichment_attempted_at so the enrich queue re-processes
-          // this event with the new sighting's data as additional context.
+          // Booleans: != null so false is not silently skipped
+          ...(item.is_free    != null && { is_free:    item.is_free }),
+          ...(item.is_outdoor != null && { is_outdoor: item.is_outdoor }),
+          ...(item.is_public  != null && { is_public:  item.is_public }),
+          ...(item.rsvp_required != null && { rsvp_required: item.rsvp_required }),
+          // Reset enrichment queue so enrich re-runs with fresh sighting data
           enrichment_attempted_at: null,
         })
         .eq("id", eventId);
