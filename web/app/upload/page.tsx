@@ -25,9 +25,9 @@ function useProgress(active: boolean) {
   useEffect(() => {
     if (active) {
       setProgress(0)
-      const duration = 75_000   // ms
-      const target   = 95       // %
-      const tick     = 250      // ms between updates
+      const duration = 75_000
+      const target   = 95
+      const tick     = 250
       const step     = (target / duration) * tick
 
       intervalRef.current = setInterval(() => {
@@ -65,14 +65,25 @@ function useProgress(active: boolean) {
 
 export default function UploadPage() {
   const supabase = createClient()
-  const [email, setEmail] = useState('')
-  const [sent, setSent] = useState(false)
-  const [user, setUser] = useState<any>(null)
+
+  // Auth
+  const [email, setEmail]   = useState('')
+  const [sent, setSent]     = useState(false)
+  const [user, setUser]     = useState<any>(null)
   const [loading, setLoading] = useState(true)
+
+  // Upload
   const [uploading, setUploading] = useState(false)
-  const [results, setResults] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [showRaw, setShowRaw] = useState(false)
+  const [results, setResults]     = useState<any>(null)
+  const [error, setError]         = useState<string | null>(null)
+  const [showRaw, setShowRaw]     = useState(false)
+
+  // Board details submission
+  const [description, setDescription]           = useState('')
+  const [isIndoor, setIsIndoor]                 = useState<boolean | null>(null)
+  const [submittingBoard, setSubmittingBoard]   = useState(false)
+  const [boardSubmitted, setBoardSubmitted]     = useState(false)
+  const [boardError, setBoardError]             = useState<string | null>(null)
 
   const { progress, complete, reset } = useProgress(uploading)
 
@@ -82,6 +93,23 @@ export default function UploadPage() {
       setLoading(false)
     })
   })
+
+  // When a board_id comes back, fetch its existing description to pre-populate.
+  useEffect(() => {
+    if (!results?.board_id) return
+    setBoardSubmitted(false)
+    setBoardError(null)
+    setIsIndoor(null)
+
+    supabase
+      .from('boards')
+      .select('description')
+      .eq('id', results.board_id)
+      .maybeSingle()
+      .then(({ data }) => {
+        setDescription(data?.description ?? '')
+      })
+  }, [results?.board_id])
 
   async function signIn() {
     const { error } = await supabase.auth.signInWithOtp({
@@ -107,8 +135,8 @@ export default function UploadPage() {
         exifr.parse(file, ['DateTimeOriginal']).catch(() => null),
       ])
 
-      const lat = gps?.latitude ?? null
-      const lng = gps?.longitude ?? null
+      const lat          = gps?.latitude ?? null
+      const lng          = gps?.longitude ?? null
       const capture_date = exifData?.DateTimeOriginal
         ? new Date(exifData.DateTimeOriginal).toISOString()
         : null
@@ -129,7 +157,7 @@ export default function UploadPage() {
         {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type':  'application/json',
             'Authorization': `Bearer ${session?.access_token}`
           },
           body: JSON.stringify({ photo_path: path, lat, lng, capture_date })
@@ -146,6 +174,35 @@ export default function UploadPage() {
       setUploading(false)
     }
   }
+
+  async function submitBoardDetails() {
+    if (!results?.board_id) return
+
+    // At least one field required — mirrors the DB CHECK constraint.
+    const trimmed = description.trim()
+    if (!trimmed && isIndoor === null) return
+
+    setSubmittingBoard(true)
+    setBoardError(null)
+
+    const { error } = await supabase
+      .from('board_submissions')
+      .insert({
+        board_id:    results.board_id,
+        description: trimmed || null,
+        is_indoor:   isIndoor,
+      })
+
+    setSubmittingBoard(false)
+
+    if (error) {
+      setBoardError(error.message)
+    } else {
+      setBoardSubmitted(true)
+    }
+  }
+
+  const boardDetailsReady = description.trim().length > 0 || isIndoor !== null
 
   if (loading) return (
     <div className="min-h-screen bg-surface-page" />
@@ -291,6 +348,79 @@ export default function UploadPage() {
                     <span className="text-xs text-content-muted shrink-0">{e.match_type ?? 'new'}</span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Board details — only shown when a board was linked */}
+            {results.board_id && (
+              <div className="px-4 py-5 space-y-5">
+
+                <div>
+                  <p className="text-sm font-medium text-content-primary">Where is this board?</p>
+                  <p className="text-xs text-content-muted mt-1">
+                    Help future contributors and visitors find it in person.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-content-secondary">Location</label>
+                  <textarea
+                    value={description}
+                    onChange={e => setDescription(e.target.value)}
+                    disabled={boardSubmitted}
+                    placeholder="e.g. Inside Rainy Day Records on 5th Ave, on the wall left of the front door"
+                    rows={2}
+                    className="w-full bg-surface-page border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle resize-none disabled:opacity-50"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs text-content-secondary">Indoors?</label>
+                  <div className="flex items-center gap-2">
+                    {([true, false, null] as const).map((val) => {
+                      const label = val === true ? 'Yes' : val === false ? 'No' : 'Not sure'
+                      const active = isIndoor === val
+                      return (
+                        <button
+                          key={label}
+                          onClick={() => !boardSubmitted && setIsIndoor(val)}
+                          disabled={boardSubmitted}
+                          className={[
+                            'px-3 py-1.5 rounded text-xs transition-colors disabled:opacity-50',
+                            active
+                              ? 'bg-content-secondary text-surface-page'
+                              : 'bg-surface-page border border-edge text-content-muted hover:border-edge-subtle',
+                          ].join(' ')}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {boardSubmitted ? (
+                  <p className="text-sm text-content-secondary">Thanks — details submitted.</p>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={submitBoardDetails}
+                      disabled={!boardDetailsReady || submittingBoard}
+                      className="px-3 py-1.5 bg-content-secondary text-surface-page rounded text-xs font-medium disabled:opacity-40"
+                    >
+                      {submittingBoard ? 'Submitting…' : 'Submit board details'}
+                    </button>
+                    {!boardDetailsReady && (
+                      <span className="text-xs text-content-muted">
+                        Add a location or indoor status to submit.
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {boardError && (
+                  <p className="text-xs text-red-400">{boardError}</p>
+                )}
               </div>
             )}
 
