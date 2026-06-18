@@ -301,7 +301,6 @@ Deno.serve(async (req) => {
     } else if (nearby && nearby.length > 0) {
       resolvedBoardId = nearby[0].id;
       console.log("Found existing board:", resolvedBoardId);
-    // AFTER:
     } else {
       const geo = await reverseGeocodeBoard(lat, lng)
 
@@ -480,6 +479,15 @@ Deno.serve(async (req) => {
     let matchType: string = "none";
 
     // ── Event matching ────────────────────────────────────────────────────
+    // Top-billed act: prefer explicit billing_position = 1, fall back to
+    // the first talent entry. Passed to find_event_match() as the talent
+    // anchor signal — a stable identity even when the AI names the event
+    // differently across extractions of the same flyer.
+    const topAct: string | null =
+      item.talent?.find((t: any) => t.billing_position === 1)?.name
+      ?? item.talent?.[0]?.name
+      ?? null;
+
     const { data: match, error: matchError } = await supabase.rpc("find_event_match", {
       p_name:          item.name,
       p_date_start:    item.date_start ?? null,
@@ -487,6 +495,7 @@ Deno.serve(async (req) => {
       p_board_lat:     lat ?? null,
       p_board_lng:     lng ?? null,
       p_event_url:     item.event_url ?? null,
+      p_talent_name:   topAct,
     });
 
     if (matchError) {
