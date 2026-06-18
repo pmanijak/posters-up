@@ -1,6 +1,7 @@
 // app/page.tsx
 import { Suspense } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'
 import { SearchInput } from './components/search-input'
 import { EventCard } from './components/event-card'
@@ -42,8 +43,7 @@ export default async function DiscoverPage({
     query = query.ilike('search_text', `%${q}%`)
   }
 
-  const { data: events, error } = await query
-    .limit(500)
+  const { data: events, error } = await query.limit(500)
 
   if (error) {
     console.error('events_public query failed:', error)
@@ -102,39 +102,46 @@ export default async function DiscoverPage({
         </div>
       </header>
 
-      {/* Category chips — sticky */}
-      <div className="sticky top-0 z-10 bg-surface-page">
-        <div className="max-w-2xl mx-auto px-4 pt-6 pb-3">
-          <Suspense fallback={null}>
-            <FilterBar activeCategory={category} />
-          </Suspense>
-        </div>
-      </div>
+      {/*
+        FiltersProvider owns query state and all URL writes.
+        One Suspense boundary covers both FilterBar and SearchInput
+        since useSearchParams() now only lives in the provider.
+      */}
+      <Suspense fallback={null}>
+        <FiltersProvider initialQuery={q}>
 
-      {/* Event list */}
-      <main className="max-w-2xl mx-auto px-4">
-        {/* Search — sits right above the events */}
-        <div className="my-3">
-          <Suspense fallback={null}>
-            <SearchInput activeQuery={q} />
-          </Suspense>
-        </div>
-
-        {eventList.length === 0 ? (
-          <EmptyState category={category} q={q} />
-        ) : (
-          <div className="space-y-3">
-            {eventList.map((event) => (
-              <EventCard key={event.id} event={event} />
-            ))}
-            <p className="text-center text-xs pt-4 text-content-muted">
-              {eventList.length} event{eventList.length !== 1 ? 's' : ''}
-              {!q && category && category !== 'all' ? ` · ${category}` : ''}
-              {q ? ` · "${q}"` : ''}
-            </p>
+          {/* Category chips — sticky */}
+          <div className="sticky top-0 z-10 bg-surface-page">
+            <div className="max-w-2xl mx-auto px-4 pt-6 pb-3">
+              <FilterBar activeCategory={category} />
+            </div>
           </div>
-        )}
-      </main>
+
+          {/* Event list */}
+          <main className="max-w-2xl mx-auto px-4">
+            {/* Search — sits right above the events */}
+            <div className="my-3">
+              <SearchInput />
+            </div>
+
+            {eventList.length === 0 ? (
+              <EmptyState category={category} q={q} />
+            ) : (
+              <div className="space-y-3">
+                {eventList.map((event) => (
+                  <EventCard key={event.id} event={event} />
+                ))}
+                <p className="text-center text-xs pt-4 text-content-muted">
+                  {eventList.length} event{eventList.length !== 1 ? 's' : ''}
+                  {!q && category && category !== 'all' ? ` · ${category}` : ''}
+                  {q ? ` · "${q}"` : ''}
+                </p>
+              </div>
+            )}
+          </main>
+
+        </FiltersProvider>
+      </Suspense>
 
     </div>
   )

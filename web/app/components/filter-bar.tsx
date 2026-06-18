@@ -1,30 +1,23 @@
 'use client'
 // app/components/filter-bar.tsx
-import { useRouter, useSearchParams } from 'next/navigation'
-import { useCallback } from 'react'
 import { CATEGORIES, categoryColor, hexToRgba } from '@/lib/categories'
+import { useFilters } from './filters-provider'
 
 interface FilterBarProps {
   activeCategory?: string
 }
 
 export function FilterBar({ activeCategory }: FilterBarProps) {
-  const router = useRouter()
-  const searchParams = useSearchParams()
+  const { setQuery, pushParams } = useFilters()
 
-  const updateFilter = useCallback(
-    (key: string, value: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      if (value === 'all' || value === '') {
-        params.delete(key)
-         params.delete('q')
-      } else {
-        params.set(key, value)
-      }
-      router.push(`?${params.toString()}`, { scroll: false })
-    },
-    [router, searchParams]
-  )
+  const handleCategory = (value: string) => {
+    if (value === 'all') {
+      setQuery('')                             // clears the search input locally
+      pushParams({ category: null, q: null }) // clears both from URL
+    } else {
+      pushParams({ category: value })
+    }
+  }
 
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -34,10 +27,11 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
             ? !activeCategory || activeCategory === 'all'
             : activeCategory === cat.value
         const color = categoryColor(cat.value)
+
         return (
           <button
             key={cat.value}
-            onClick={() => updateFilter('category', cat.value)}
+            onClick={() => handleCategory(cat.value)}
             className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
             style={
               isActive

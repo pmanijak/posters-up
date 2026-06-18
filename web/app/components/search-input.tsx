@@ -1,52 +1,37 @@
 'use client'
 // app/components/search-input.tsx
-import { useRouter, useSearchParams } from 'next/navigation'
-import { useCallback, useRef } from 'react'
+import { useRef } from 'react'
+import { useFilters } from './filters-provider'
 
-interface SearchInputProps {
-  activeQuery?: string
-}
-
-export function SearchInput({ activeQuery }: SearchInputProps) {
-  const router = useRouter()
-  const searchParams = useSearchParams()
+export function SearchInput() {
+  const { query, setQuery, pushParams } = useFilters()
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
 
-  const updateQuery = useCallback(
-    (value: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      if (value === '') {
-        params.delete('q')
-      } else {
-        params.set('q', value)
-      }
-      router.push(`?${params.toString()}`, { scroll: false })
-    },
-    [router, searchParams]
-  )
-
-  const handleSearch = (value: string) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value
+    setQuery(val)
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => updateQuery(value), 300)
+    debounceRef.current = setTimeout(() => {
+      pushParams({ q: val || null })
+    }, 300)
   }
 
   const clearSearch = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (inputRef.current) inputRef.current.value = ''
-    updateQuery('')
+    setQuery('')
+    pushParams({ q: null })
   }
 
   return (
     <div className="relative">
-      <label htmlFor="event-search" className="sr-only">Search events</label>
+      <label htmlFor="event-search" className="sr-only">
+        Search events
+      </label>
       <input
-        ref={inputRef}
         id="event-search"
         type="text"
-        defaultValue={activeQuery ?? ''}
-        key={activeQuery ?? ''}
-        onChange={e => handleSearch(e.target.value)}
+        value={query}
+        onChange={handleChange}
         placeholder="Search events…"
         className="w-full px-3 py-1.5 rounded text-sm bg-transparent outline-none placeholder:text-content-muted"
         style={{
@@ -54,7 +39,7 @@ export function SearchInput({ activeQuery }: SearchInputProps) {
           color: 'var(--color-content-primary)',
         }}
       />
-      {activeQuery && (
+      {query && (
         <button
           onClick={clearSearch}
           className="absolute right-2 top-1/2 -translate-y-1/2 text-content-muted hover:text-content-secondary transition-colors"
