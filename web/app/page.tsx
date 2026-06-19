@@ -54,11 +54,11 @@ export default async function DiscoverPage({
     ? savedLocation.split(',').map(parseFloat)
     : [null, null]
 
-  console.log('postersup_city cookie:', savedLocation)
-  console.log('resolved lat/lng:', lat, lng)
-
   const lat = resolveCoord(latParam, savedLat, h.get('x-vercel-ip-latitude'),  DEFAULT_LAT)
   const lng = resolveCoord(lngParam, savedLng, h.get('x-vercel-ip-longitude'), DEFAULT_LNG)
+
+  console.log('postersup_city cookie:', savedLocation)
+  console.log('resolved lat/lng:', lat, lng)
 
   // Date cutoff: flip at 3am Pacific.
   // Subtract 3 hours so at 2:59am it's still "yesterday"; at 3:00am it rolls to today.
