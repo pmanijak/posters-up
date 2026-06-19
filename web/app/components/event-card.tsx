@@ -345,7 +345,7 @@ export function EventCard({ event }: { event: Event }) {
                       {data.boards.map((b) => (
                         <li key={b.board_id} className="flex items-baseline justify-between gap-4">
                           <span className="text-sm text-content-secondary">
-                            {b.board_description ?? b.board_type ?? 'Community board'}
+                            {b.board_description ?? '(unnamed board)'}
                           </span>
                           <span className="text-xs text-content-muted shrink-0">
                             {seenAgo(b.last_seen_at)}
