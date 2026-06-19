@@ -6,6 +6,7 @@ import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'
 import { SearchInput } from './components/search-input'
 import { EventCard } from './components/event-card'
+import { CityPicker, type CityOption } from './components/city-picker'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -15,7 +16,6 @@ const supabase = createClient(
 // Olympia, WA — default when no location is available
 const DEFAULT_LAT = 47.0379
 const DEFAULT_LNG = -122.9007
-
 
 interface SearchParams {
   category?: string
@@ -36,31 +36,31 @@ export default async function DiscoverPage({
   const lat = parseFloat(latParam ?? h.get('x-vercel-ip-latitude')  ?? String(DEFAULT_LAT))
   const lng = parseFloat(lngParam ?? h.get('x-vercel-ip-longitude') ?? String(DEFAULT_LNG))
 
-  // Date cutoff: flip at 3am Pacific
-  // Subtracting 3 hours means at 2:59am Pacific it's still "yesterday",
-  // at 3:00am it rolls to today.
+  // Date cutoff: flip at 3am Pacific.
+  // Subtract 3 hours so at 2:59am it's still "yesterday"; at 3:00am it rolls to today.
   const pacificTime = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Los_Angeles',
   })
-  const today = pacificTime.format(new Date(Date.now() - 3 * 60 * 60 * 1000))
+  const today         = pacificTime.format(new Date(Date.now() - 3 * 60 * 60 * 1000))
   const thirtyDaysOut = pacificTime.format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
 
-  // Find nearby boards — gives us the city name and event scope in one shot.
-  // boards.geo_city is populated by Nominatim during extraction.
+  // Find nearby boards — gives us city name + event scope in one shot.
+  // geo_city is populated by Nominatim during extraction.
   // The nearest board's city is always correct; Vercel IP city is not.
-const { data: nearbyBoards, error: rpcError } = await supabase.rpc('boards_near', { lat, lng })
-console.log('lat/lng:', lat, lng)
-console.log('nearbyBoards:', nearbyBoards, 'rpcError:', rpcError)
-  const cityLabel   = nearbyBoards?.[0]?.geo_city ?? null
+  const { data: nearbyBoards } = await supabase.rpc('boards_near', { lat, lng })
   const nearbyBoardIds = (nearbyBoards ?? []).map((b: { id: string }) => b.id)
+  const cityLabel      = (nearbyBoards ?? [])[0]?.geo_city ?? null
 
-  // No boards nearby — skip the event query entirely
   const noBoardsNearby = nearbyBoardIds.length === 0
+
+  // Always fetch available cities — needed for the picker and costs almost nothing.
+  // Duplicate city names (e.g. two "Springfield"s) get state appended automatically.
+  const { data: rawCities } = await supabase.rpc('available_cities')
+  const availableCities: CityOption[] = buildCityOptions(rawCities ?? [])
 
   let eventList: any[] = []
 
   if (!noBoardsNearby) {
-    // Get event IDs that are currently on nearby boards
     const { data: localFlyers } = await supabase
       .from('board_flyers')
       .select('event_id')
@@ -78,7 +78,6 @@ console.log('nearbyBoards:', nearbyBoards, 'rpcError:', rpcError)
           `and(date_start.gte.${today},date_start.lte.${thirtyDaysOut}),date_type.in.(recurring,approximate,unknown)`
         )
 
-      // Hard category filter when not searching
       if (category && category !== 'all' && !q) {
         query = query.eq('event_category', category)
       }
@@ -114,7 +113,6 @@ console.log('nearbyBoards:', nearbyBoards, 'rpcError:', rpcError)
     return a.date_start.localeCompare(b.date_start)
   })
 
-  // Category priority sort when search is active
   if (q && category && category !== 'all') {
     eventList = [
       ...eventList.filter(e => e.event_category === category),
@@ -125,7 +123,6 @@ console.log('nearbyBoards:', nearbyBoards, 'rpcError:', rpcError)
   return (
     <div className="min-h-screen bg-surface-page">
 
-      {/* Header */}
       <header>
         <div className="max-w-2xl mx-auto px-4 pt-3">
           <div className="flex items-baseline justify-between">
@@ -151,21 +148,23 @@ console.log('nearbyBoards:', nearbyBoards, 'rpcError:', rpcError)
       <Suspense fallback={null}>
         <FiltersProvider initialQuery={q}>
 
-          {/* Category chips — sticky */}
           <div className="sticky top-0 z-10 bg-surface-page">
             <div className="max-w-2xl mx-auto px-4 pt-6 pb-3">
               <FilterBar activeCategory={category} />
             </div>
           </div>
 
-          {/* Event list */}
           <main className="max-w-2xl mx-auto px-4">
             <div className="my-3">
               <SearchInput />
             </div>
 
             {noBoardsNearby ? (
-              <NoBoardsState />
+              availableCities.length > 0 ? (
+                <CityPicker cities={availableCities} />
+              ) : (
+                <NoBoardsState />
+              )
             ) : eventList.length === 0 ? (
               <EmptyState category={category} q={q} />
             ) : (
@@ -189,14 +188,33 @@ console.log('nearbyBoards:', nearbyBoards, 'rpcError:', rpcError)
   )
 }
 
+// City name deduplication: only append state name when two cities share a name.
+function buildCityOptions(
+  rows: { geo_city: string; geo_region: string | null; lat: number; lng: number }[]
+): CityOption[] {
+  const cityCounts = new Map<string, number>()
+  for (const row of rows) {
+    cityCounts.set(row.geo_city, (cityCounts.get(row.geo_city) ?? 0) + 1)
+  }
+
+  return rows.map(row => ({
+    ...row,
+    label:
+      (cityCounts.get(row.geo_city) ?? 0) > 1 && row.geo_region
+        ? `${row.geo_city}, ${row.geo_region}`
+        : row.geo_city,
+  }))
+}
+
+// Shown only if the database has no cities at all (fresh deployment).
 function NoBoardsState() {
   return (
     <div className="text-center py-16">
       <p className="text-lg mb-2 font-marker text-content-primary">
-        No boards in your area yet
+        No boards yet
       </p>
       <p className="text-sm text-content-muted">
-        Posters Up is growing city by city. Submit a photo to get your area started.
+        Submit a photo to get your area started.
       </p>
       <a
         href="/upload"
