@@ -22,10 +22,11 @@ export default async function DiscoverPage({
   searchParams: Promise<SearchParams>
 }) {
   const { category, q } = await searchParams
-  const today = new Date().toISOString().split('T')[0]
-  const thirtyDaysOut = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .split('T')[0]
+  const pacificTime = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles',
+  })
+  const today = pacificTime.format(new Date(Date.now() - 3 * 60 * 60 * 1000))
+  const thirtyDaysOut = pacificTime.format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
 
   let query = supabase
     .from('events_public')
