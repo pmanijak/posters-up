@@ -37,6 +37,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
     const params = new URLSearchParams()
     params.set('lat', lat.toFixed(4))
     params.set('lng', lng.toFixed(4))
+    setDetectState('idle')
     setOpen(false)
     router.push(`/?${params.toString()}`)
   }
@@ -62,8 +63,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
       },
       () => {
         setDetectState('error')
-      },
-
+      }
     )
   }
 
