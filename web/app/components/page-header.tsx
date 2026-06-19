@@ -10,8 +10,11 @@ interface PageHeaderProps {
   isDetected: boolean
 }
 
+type DetectState = 'idle' | 'detecting' | 'error'
+
 export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen]               = useState(false)
+  const [detectState, setDetectState] = useState<DetectState>('idle')
   const router = useRouter()
 
   useEffect(() => {
@@ -23,19 +26,40 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
     return () => document.removeEventListener('keydown', onKey)
   }, [open])
 
-  function pick(city: CityOption) {
+  function pick(lat: number, lng: number) {
     document.cookie = [
-      `postersup_city=${city.lat.toFixed(4)},${city.lng.toFixed(4)}`,
+      `postersup_city=${lat.toFixed(4)},${lng.toFixed(4)}`,
       'max-age=2592000',
       'path=/',
       'SameSite=Lax',
       'Secure',
     ].join('; ')
     const params = new URLSearchParams()
-    params.set('lat', city.lat.toFixed(4))
-    params.set('lng', city.lng.toFixed(4))
+    params.set('lat', lat.toFixed(4))
+    params.set('lng', lng.toFixed(4))
     setOpen(false)
     router.push(`/?${params.toString()}`)
+  }
+
+  function pickCity(city: CityOption) {
+    pick(city.lat, city.lng)
+  }
+
+  function detectLocation() {
+    if (!navigator.geolocation) {
+      setDetectState('error')
+      return
+    }
+    setDetectState('detecting')
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        pick(pos.coords.latitude, pos.coords.longitude)
+      },
+      () => {
+        setDetectState('error')
+      },
+      { timeout: 10_000 }
+    )
   }
 
   const label = cityLabel ?? 'your area'
@@ -94,7 +118,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
                 {cities.map(city => (
                   <button
                     key={`${city.geo_city}-${city.geo_region}`}
-                    onClick={() => pick(city)}
+                    onClick={() => pickCity(city)}
                     className="text-sm text-content-secondary hover:text-content-primary transition-colors"
                   >
                     {city.label}
@@ -102,16 +126,24 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
                 ))}
               </div>
 
-              {/* Divider + location stub */}
+              {/* Divider */}
               <span className="text-edge-subtle select-none shrink-0">·</span>
 
-              {/* TODO: wire up navigator.geolocation, then set cookie + navigate same as pick() */}
+              {/* Browser geolocation */}
               <button
-                disabled
-                className="text-xs text-content-muted opacity-40 cursor-not-allowed shrink-0"
+                onClick={detectLocation}
+                disabled={detectState === 'detecting'}
+                className="text-xs text-content-muted hover:text-content-secondary transition-colors shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                📍 Use my location
+                {detectState === 'detecting' ? 'Detecting…' : '📍 Use my location'}
               </button>
+
+              {/* Error — shown inline, clears on next open */}
+              {detectState === 'error' && (
+                <span className="text-xs text-content-muted shrink-0">
+                  Couldn't get your location.
+                </span>
+              )}
 
             </div>
           </div>
