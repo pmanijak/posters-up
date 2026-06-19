@@ -42,6 +42,11 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
     router.push(`/?${params.toString()}`)
   }
 
+  function openTray() {
+    setOpen(true)
+    setDetectState('idle')
+  }
+
   function closeAndReset() {
     setOpen(false)
     setDetectState('idle')
@@ -81,7 +86,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
               <div className="text-sm mt-0.5 text-content-muted">
                 Events from the bulletin boards around{' '}
                 <button
-                  onClick={() => (open ? closeAndReset() : setOpen(true))}
+                  onClick={() => (open ? closeAndReset() : openTray())}
                   className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors"
                   aria-expanded={open}
                   aria-haspopup="dialog"
