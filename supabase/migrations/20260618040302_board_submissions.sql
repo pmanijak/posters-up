@@ -165,12 +165,14 @@ FOR EACH ROW EXECUTE FUNCTION trg_apply_on_approval();
 
 
 -- ============================================================
--- BOARDS TABLE: add is_indoor and updated_at
--- Neither was in v7.
--- is_indoor: set by consensus across board_submissions.
--- updated_at: tracks when the consensus function last wrote back.
--- Also drop board_type from boards — the description covers it.
+-- BOARDS TABLE: add is_indoor and updated_at, drop board_type.
+-- Views that reference board_type must be dropped first —
+-- Postgres won't drop a column with dependent objects.
+-- Both views are recreated below without board_type.
 -- ============================================================
+
+DROP VIEW IF EXISTS event_board_locations;
+DROP VIEW IF EXISTS boards_public;
 
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS is_indoor   BOOLEAN;
 ALTER TABLE boards ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMPTZ NOT NULL DEFAULT now();
@@ -181,12 +183,8 @@ CREATE INDEX IF NOT EXISTS idx_boards_indoor ON boards(is_indoor)
 
 
 -- ============================================================
--- boards_public VIEW: reflect schema changes
--- Drop and recreate — Postgres doesn't support ALTER COLUMN on views.
--- board_type removed; is_indoor added.
+-- boards_public VIEW: board_type removed; is_indoor added.
 -- ============================================================
-
-DROP VIEW IF EXISTS boards_public;
 
 CREATE VIEW boards_public AS
 SELECT
@@ -207,6 +205,24 @@ LEFT JOIN board_flyers bf ON bf.board_id = b.id
 LEFT JOIN events e        ON e.id = bf.event_id
 WHERE b.is_active = true
 GROUP BY b.id;
+
+
+-- ============================================================
+-- event_board_locations VIEW: board_type removed.
+-- ============================================================
+
+CREATE VIEW event_board_locations AS
+SELECT
+  bf.event_id,
+  b.id              AS board_id,
+  b.geolocation,
+  b.description     AS board_description,
+  bf.first_seen_at,
+  bf.last_seen_at
+FROM board_flyers bf
+JOIN boards b ON b.id = bf.board_id
+WHERE bf.is_active = true
+  AND b.is_active  = true;
 
 
 -- ============================================================
