@@ -20,7 +20,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
   useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') closeAndReset()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -41,6 +41,11 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
     router.push(`/?${params.toString()}`)
   }
 
+  function closeAndReset() {
+    setOpen(false)
+    setDetectState('idle')
+  }
+
   function pickCity(city: CityOption) {
     pick(city.lat, city.lng)
   }
@@ -58,7 +63,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
       () => {
         setDetectState('error')
       },
-      { timeout: 10_000 }
+
     )
   }
 
@@ -76,7 +81,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
               <div className="text-sm mt-0.5 text-content-muted">
                 Events from the bulletin boards around{' '}
                 <button
-                  onClick={() => setOpen(v => !v)}
+                  onClick={() => (open ? closeAndReset() : setOpen(true))}
                   className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors"
                   aria-expanded={open}
                   aria-haspopup="dialog"
