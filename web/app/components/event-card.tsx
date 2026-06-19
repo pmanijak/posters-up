@@ -51,7 +51,6 @@ interface Event {
 interface BoardLocation {
   board_id: string
   board_description: string | null
-  board_type: string | null
   last_seen_at: string
 }
 

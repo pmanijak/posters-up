@@ -48,7 +48,7 @@ export async function GET(
   const [boardsRes, verifyRes, sightingRes] = await Promise.all([
     supabase
       .from('event_board_locations')
-      .select('board_id, board_description, board_type, last_seen_at')
+      .select('board_id, board_description, last_seen_at')
       .eq('event_id', eventId)
       .order('last_seen_at', { ascending: false }),
 
