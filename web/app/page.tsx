@@ -7,6 +7,7 @@ import { FilterBar } from './components/filter-bar'
 import { SearchInput } from './components/search-input'
 import { EventCard } from './components/event-card'
 import { CityPicker, type CityOption } from './components/city-picker'
+import { PageHeader } from './components/page-header'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -24,9 +25,6 @@ interface SearchParams {
   lng?: string
 }
 
-// Resolve a coordinate from: URL param → cookie → Vercel IP header → default.
-// Cookie is an explicit user choice (set by CityPicker); it outranks IP detection
-// because it represents intent, not inference.
 function resolveCoord(
   urlParam: string | undefined,
   cookieVal: number | null,
@@ -46,7 +44,6 @@ export default async function DiscoverPage({
 }) {
   const { category, q, lat: latParam, lng: lngParam } = await searchParams
 
-  // Read location signals
   const h = await headers()
   const cookieStore = await cookies()
   const savedLocation = cookieStore.get('postersup_city')?.value
@@ -54,30 +51,23 @@ export default async function DiscoverPage({
     ? savedLocation.split(',').map(parseFloat)
     : [null, null]
 
+  const locationIsUserSet = savedLocation != null
+
   const lat = resolveCoord(latParam, savedLat, h.get('x-vercel-ip-latitude'),  DEFAULT_LAT)
   const lng = resolveCoord(lngParam, savedLng, h.get('x-vercel-ip-longitude'), DEFAULT_LNG)
 
-
-
-  // Date cutoff: flip at 3am Pacific.
-  // Subtract 3 hours so at 2:59am it's still "yesterday"; at 3:00am it rolls to today.
   const pacificTime = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Los_Angeles',
   })
   const today         = pacificTime.format(new Date(Date.now() - 3 * 60 * 60 * 1000))
   const thirtyDaysOut = pacificTime.format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
 
-  // Find nearby boards — gives us city name + event scope in one shot.
-  // geo_city is populated by Nominatim during extraction.
-  // The nearest board's city is always correct; Vercel IP city is not.
   const { data: nearbyBoards } = await supabase.rpc('boards_near', { lat, lng })
   const nearbyBoardIds = (nearbyBoards ?? []).map((b: { id: string }) => b.id)
   const cityLabel      = (nearbyBoards ?? [])[0]?.geo_city ?? null
 
   const noBoardsNearby = nearbyBoardIds.length === 0
 
-  // Always fetch available cities — needed for the picker and costs almost nothing.
-  // Duplicate city names (e.g. two "Springfield"s) get state appended automatically.
   const { data: rawCities } = await supabase.rpc('available_cities')
   const availableCities: CityOption[] = buildCityOptions(rawCities ?? [])
 
@@ -146,27 +136,11 @@ export default async function DiscoverPage({
   return (
     <div className="min-h-screen bg-surface-page">
 
-      <header>
-        <div className="max-w-2xl mx-auto px-4 pt-3">
-          <div className="flex items-baseline justify-between">
-            <div>
-              <h1 className="font-marker text-3xl text-content-primary">
-                Posters Up
-              </h1>
-              <p className="text-sm mt-0.5 text-content-muted">
-                Events from the bulletin boards{' '}
-                {cityLabel ? `around ${cityLabel}` : 'near you'}
-              </p>
-            </div>
-            <a
-              href="/upload"
-              className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
-            >
-              + Submit photo
-            </a>
-          </div>
-        </div>
-      </header>
+      <PageHeader
+        cityLabel={cityLabel}
+        cities={availableCities}
+        isDetected={!locationIsUserSet}
+      />
 
       <Suspense fallback={null}>
         <FiltersProvider key={q ?? ''} initialQuery={q}>
@@ -211,7 +185,6 @@ export default async function DiscoverPage({
   )
 }
 
-// City name deduplication: only append state name when two cities share a name.
 function buildCityOptions(
   rows: { geo_city: string; geo_region: string | null; lat: number; lng: number }[]
 ): CityOption[] {
@@ -219,7 +192,6 @@ function buildCityOptions(
   for (const row of rows) {
     cityCounts.set(row.geo_city, (cityCounts.get(row.geo_city) ?? 0) + 1)
   }
-
   return rows.map(row => ({
     ...row,
     label:
@@ -229,7 +201,6 @@ function buildCityOptions(
   }))
 }
 
-// Shown only if the database has no cities at all (fresh deployment).
 function NoBoardsState() {
   return (
     <div className="text-center py-16">
