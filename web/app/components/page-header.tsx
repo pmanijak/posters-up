@@ -119,7 +119,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
             <div className="max-w-2xl mx-auto px-4 py-5 flex items-baseline gap-6">
 
               {/* Label */}
-              <span className="font-mono text-xs text-content-muted shrink-0">
+              <span className="text-sm text-content shrink-0">
                 {!cityLabel ? "We couldn't detect your city:" : 'Where are you?'}
               </span>
 
