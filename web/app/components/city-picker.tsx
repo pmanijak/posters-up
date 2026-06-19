@@ -14,6 +14,17 @@ export function CityPicker({ cities }: { cities: CityOption[] }) {
   const router = useRouter()
 
   function pick(city: CityOption) {
+    // Save explicit choice as a cookie — server can read this on next load,
+    // so the right city renders immediately with no flash.
+    // 30-day expiry: long enough to be useful, short enough to not be stale.
+    document.cookie = [
+        `user_location=${city.lat.toFixed(4)},${city.lng.toFixed(4)}`,
+        'max-age=2592000',
+        'path=/',
+        'SameSite=Lax',
+        'Secure',
+    ].join('; ')
+
     const params = new URLSearchParams()
     params.set('lat', city.lat.toFixed(4))
     params.set('lng', city.lng.toFixed(4))
