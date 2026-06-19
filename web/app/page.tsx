@@ -169,7 +169,7 @@ export default async function DiscoverPage({
       </header>
 
       <Suspense fallback={null}>
-        <FiltersProvider initialQuery={q}>
+        <FiltersProvider key={q ?? ''} initialQuery={q}>
 
           <div className="sticky top-0 z-10 bg-surface-page">
             <div className="max-w-2xl mx-auto px-4 pt-6 pb-3">
