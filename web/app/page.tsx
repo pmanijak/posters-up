@@ -1,6 +1,6 @@
 // app/page.tsx
 import { Suspense } from 'react'
-import { headers } from 'next/headers'
+import { headers, cookies } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'
@@ -13,7 +13,7 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
 )
 
-// Olympia, WA — default when no location is available
+// Olympia, WA — default when no other location signal is available
 const DEFAULT_LAT = 47.0379
 const DEFAULT_LNG = -122.9007
 
@@ -24,6 +24,21 @@ interface SearchParams {
   lng?: string
 }
 
+// Resolve a coordinate from: URL param → cookie → Vercel IP header → default.
+// Cookie is an explicit user choice (set by CityPicker); it outranks IP detection
+// because it represents intent, not inference.
+function resolveCoord(
+  urlParam: string | undefined,
+  cookieVal: number | null,
+  vercelHeader: string | null,
+  defaultVal: number
+): number {
+  if (urlParam) return parseFloat(urlParam)
+  if (cookieVal !== null && !isNaN(cookieVal)) return cookieVal
+  if (vercelHeader) return parseFloat(vercelHeader)
+  return defaultVal
+}
+
 export default async function DiscoverPage({
   searchParams,
 }: {
@@ -31,10 +46,19 @@ export default async function DiscoverPage({
 }) {
   const { category, q, lat: latParam, lng: lngParam } = await searchParams
 
-  // Location: URL params → Vercel IP headers → Olympia default
+  // Read location signals
   const h = await headers()
-  const lat = parseFloat(latParam ?? h.get('x-vercel-ip-latitude')  ?? String(DEFAULT_LAT))
-  const lng = parseFloat(lngParam ?? h.get('x-vercel-ip-longitude') ?? String(DEFAULT_LNG))
+  const cookieStore = await cookies()
+  const savedLocation = cookieStore.get('postersup_city')?.value
+  const [savedLat, savedLng] = savedLocation
+    ? savedLocation.split(',').map(parseFloat)
+    : [null, null]
+
+  console.log('postersup_city cookie:', savedLocation)
+  console.log('resolved lat/lng:', lat, lng)
+
+  const lat = resolveCoord(latParam, savedLat, h.get('x-vercel-ip-latitude'),  DEFAULT_LAT)
+  const lng = resolveCoord(lngParam, savedLng, h.get('x-vercel-ip-longitude'), DEFAULT_LNG)
 
   // Date cutoff: flip at 3am Pacific.
   // Subtract 3 hours so at 2:59am it's still "yesterday"; at 3:00am it rolls to today.

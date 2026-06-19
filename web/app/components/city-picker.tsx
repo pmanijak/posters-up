@@ -18,11 +18,11 @@ export function CityPicker({ cities }: { cities: CityOption[] }) {
     // so the right city renders immediately with no flash.
     // 30-day expiry: long enough to be useful, short enough to not be stale.
     document.cookie = [
-        `user_location=${city.lat.toFixed(4)},${city.lng.toFixed(4)}`,
-        'max-age=2592000',
-        'path=/',
-        'SameSite=Lax',
-        'Secure',
+      `postersup_city=${city.lat.toFixed(4)},${city.lng.toFixed(4)}`,
+      'max-age=2592000',
+      'path=/',
+      'SameSite=Lax',
+      'Secure',
     ].join('; ')
 
     const params = new URLSearchParams()
