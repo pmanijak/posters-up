@@ -1,0 +1,21 @@
+REVOKE TRUNCATE ON
+  talent,
+  users,
+  venues,
+  organizations,
+  follows,
+  events,
+  event_talent,
+  photos,
+  board_flyers,
+  boards,
+  event_sightings,
+  event_reports,
+  config,
+  boards_public,
+  events_public,
+  event_verifications,
+  venues_public,
+  talent_public,
+  event_board_locations
+FROM anon, authenticated;
