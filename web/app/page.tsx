@@ -1,5 +1,6 @@
 // app/page.tsx
 import { Suspense } from 'react'
+import { headers } from 'next/headers'
 import { createClient } from '@supabase/supabase-js'
 import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'
@@ -11,9 +12,16 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
 )
 
+// Olympia, WA — default when no location is available
+const DEFAULT_LAT = 47.0379
+const DEFAULT_LNG = -122.9007
+
+
 interface SearchParams {
   category?: string
   q?: string
+  lat?: string
+  lng?: string
 }
 
 export default async function DiscoverPage({
@@ -21,36 +29,73 @@ export default async function DiscoverPage({
 }: {
   searchParams: Promise<SearchParams>
 }) {
-  const { category, q } = await searchParams
+  const { category, q, lat: latParam, lng: lngParam } = await searchParams
+
+  // Location: URL params → Vercel IP headers → Olympia default
+  const h = await headers()
+  const lat = parseFloat(latParam ?? h.get('x-vercel-ip-latitude')  ?? String(DEFAULT_LAT))
+  const lng = parseFloat(lngParam ?? h.get('x-vercel-ip-longitude') ?? String(DEFAULT_LNG))
+
+  // Date cutoff: flip at 3am Pacific
+  // Subtracting 3 hours means at 2:59am Pacific it's still "yesterday",
+  // at 3:00am it rolls to today.
   const pacificTime = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Los_Angeles',
   })
   const today = pacificTime.format(new Date(Date.now() - 3 * 60 * 60 * 1000))
   const thirtyDaysOut = pacificTime.format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
 
-  let query = supabase
-    .from('events_public')
-    .select('*')
-    .or(
-      `and(date_start.gte.${today},date_start.lte.${thirtyDaysOut}),date_type.in.(recurring,approximate,unknown)`
-    )
+  // Find nearby boards — gives us the city name and event scope in one shot.
+  // boards.geo_city is populated by Nominatim during extraction.
+  // The nearest board's city is always correct; Vercel IP city is not.
+const { data: nearbyBoards, error: rpcError } = await supabase.rpc('boards_near', { lat, lng })
+console.log('lat/lng:', lat, lng)
+console.log('nearbyBoards:', nearbyBoards, 'rpcError:', rpcError)
+  const cityLabel   = nearbyBoards?.[0]?.geo_city ?? null
+  const nearbyBoardIds = (nearbyBoards ?? []).map((b: { id: string }) => b.id)
 
-  // When search is active, category becomes a priority sort rather than a hard filter.
-  if (category && category !== 'all' && !q) {
-    query = query.eq('event_category', category)
+  // No boards nearby — skip the event query entirely
+  const noBoardsNearby = nearbyBoardIds.length === 0
+
+  let eventList: any[] = []
+
+  if (!noBoardsNearby) {
+    // Get event IDs that are currently on nearby boards
+    const { data: localFlyers } = await supabase
+      .from('board_flyers')
+      .select('event_id')
+      .in('board_id', nearbyBoardIds)
+      .eq('is_active', true)
+
+    const localEventIds = (localFlyers ?? []).map((f: { event_id: string }) => f.event_id)
+
+    if (localEventIds.length > 0) {
+      let query = supabase
+        .from('events_public')
+        .select('*')
+        .in('id', localEventIds)
+        .or(
+          `and(date_start.gte.${today},date_start.lte.${thirtyDaysOut}),date_type.in.(recurring,approximate,unknown)`
+        )
+
+      // Hard category filter when not searching
+      if (category && category !== 'all' && !q) {
+        query = query.eq('event_category', category)
+      }
+
+      if (q) {
+        query = query.ilike('search_text', `%${q}%`)
+      }
+
+      const { data: events, error } = await query.limit(100)
+
+      if (error) {
+        console.error('events_public query failed:', error)
+      }
+
+      eventList = events ?? []
+    }
   }
-
-  if (q) {
-    query = query.ilike('search_text', `%${q}%`)
-  }
-
-  const { data: events, error } = await query.limit(500)
-
-  if (error) {
-    console.error('events_public query failed:', error)
-  }
-
-  let eventList = events ?? []
 
   const DATE_TYPE_PRIORITY: Record<string, number> = {
     specific:    0,
@@ -59,7 +104,6 @@ export default async function DiscoverPage({
     unknown:     3,
   }
 
-  // Sort: specific upcoming events first by date, then recurring, approximate, unknown
   eventList = [...eventList].sort((a, b) => {
     const pa = DATE_TYPE_PRIORITY[a.date_type] ?? 3
     const pb = DATE_TYPE_PRIORITY[b.date_type] ?? 3
@@ -70,7 +114,7 @@ export default async function DiscoverPage({
     return a.date_start.localeCompare(b.date_start)
   })
 
-  // Category priority sort when search is active (replaces the filter block below)
+  // Category priority sort when search is active
   if (q && category && category !== 'all') {
     eventList = [
       ...eventList.filter(e => e.event_category === category),
@@ -90,7 +134,8 @@ export default async function DiscoverPage({
                 Posters Up
               </h1>
               <p className="text-sm mt-0.5 text-content-muted">
-                Events from the bulletin boards around Olympia
+                Events from the bulletin boards{' '}
+                {cityLabel ? `around ${cityLabel}` : 'near you'}
               </p>
             </div>
             <a
@@ -103,11 +148,6 @@ export default async function DiscoverPage({
         </div>
       </header>
 
-      {/*
-        FiltersProvider owns query state and all URL writes.
-        One Suspense boundary covers both FilterBar and SearchInput
-        since useSearchParams() now only lives in the provider.
-      */}
       <Suspense fallback={null}>
         <FiltersProvider initialQuery={q}>
 
@@ -120,12 +160,13 @@ export default async function DiscoverPage({
 
           {/* Event list */}
           <main className="max-w-2xl mx-auto px-4">
-            {/* Search — sits right above the events */}
             <div className="my-3">
               <SearchInput />
             </div>
 
-            {eventList.length === 0 ? (
+            {noBoardsNearby ? (
+              <NoBoardsState />
+            ) : eventList.length === 0 ? (
               <EmptyState category={category} q={q} />
             ) : (
               <div className="space-y-3">
@@ -144,6 +185,25 @@ export default async function DiscoverPage({
         </FiltersProvider>
       </Suspense>
 
+    </div>
+  )
+}
+
+function NoBoardsState() {
+  return (
+    <div className="text-center py-16">
+      <p className="text-lg mb-2 font-marker text-content-primary">
+        No boards in your area yet
+      </p>
+      <p className="text-sm text-content-muted">
+        Posters Up is growing city by city. Submit a photo to get your area started.
+      </p>
+      <a
+        href="/upload"
+        className="text-sm mt-3 inline-block text-content-secondary underline underline-offset-2"
+      >
+        Submit a photo
+      </a>
     </div>
   )
 }
