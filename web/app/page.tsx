@@ -99,7 +99,7 @@ export default async function DiscoverPage({
         query = query.ilike('search_text', `%${q}%`)
       }
 
-      const { data: events, error } = await query.limit(100)
+      const { data: events, error } = await query.limit(500)
 
       if (error) {
         console.error('events_public query failed:', error)
