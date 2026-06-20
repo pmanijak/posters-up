@@ -9,10 +9,11 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 // ============================================================
 
 interface Submission {
-  id:          string;
-  board_id:    string;
-  description: string | null;
-  is_indoor:   boolean | null;
+  id:                           string;
+  board_id:                     string;
+  description:                  string | null;
+  requires_entry_to_photograph: boolean | null;
+  requires_entry_to_post:       boolean | null;
 }
 
 interface ReviewResult {
@@ -23,10 +24,8 @@ interface ReviewResult {
 
 // ============================================================
 // REVIEW WITHOUT API
-// Used when the submission has no description — only is_indoor.
-// The DB CHECK constraint guarantees at least one field is set,
-// so if we're here, is_indoor is non-null. Nothing to correct;
-// approve immediately without an API call.
+// Used when the submission has no description — only entry flags.
+// Nothing to correct; approve immediately without an API call.
 // ============================================================
 
 function reviewWithoutDescription(): ReviewResult {
@@ -46,13 +45,18 @@ function reviewWithoutDescription(): ReviewResult {
 // ============================================================
 
 async function reviewWithAPI(submission: Submission): Promise<ReviewResult> {
-  const isIndoorNote = submission.is_indoor !== null
-    ? `\nContributor reported indoor: ${submission.is_indoor}`
-    : "";
+  const entryLines: string[] = [];
+  if (submission.requires_entry_to_photograph !== null) {
+    entryLines.push(`Requires entry to photograph: ${submission.requires_entry_to_photograph}`);
+  }
+  if (submission.requires_entry_to_post !== null) {
+    entryLines.push(`Requires entry to post: ${submission.requires_entry_to_post}`);
+  }
+  const entryNote = entryLines.length > 0 ? "\n" + entryLines.join("\n") : "";
 
   const prompt = `You are reviewing a contributor submission for a community bulletin board app called Posters Up. The contributor was standing at a physical bulletin board and submitted what they observed.
 
-Contributor's description: "${submission.description}"${isIndoorNote}
+Contributor's description: "${submission.description}"${entryNote}
 
 Your job:
 
@@ -125,7 +129,7 @@ Deno.serve(async () => {
   // Pick the oldest pending submission
   const { data: submission, error: fetchError } = await supabase
     .from("board_submissions")
-    .select("id, board_id, description, is_indoor")
+    .select("id, board_id, description, requires_entry_to_photograph, requires_entry_to_post")
     .eq("review_status", "pending")
     .order("submitted_at", { ascending: true })
     .limit(1)

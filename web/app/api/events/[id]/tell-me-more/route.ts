@@ -48,7 +48,7 @@ export async function GET(
   const [boardsRes, verifyRes, sightingRes] = await Promise.all([
     supabase
       .from('event_board_locations')
-      .select('board_id, board_description, last_seen_at')
+      .select('board_id, board_description, last_seen_at, lat, lng, managed_by, requires_entry_to_photograph')
       .eq('event_id', eventId)
       .order('last_seen_at', { ascending: false }),
 
@@ -67,6 +67,8 @@ export async function GET(
       .limit(1)
       .single(),
   ])
+
+  console.log(boardsRes.error);
 
   // Deduplicate verifications by source_url.
   // The enrich function may insert multiple rows for the same URL if it
