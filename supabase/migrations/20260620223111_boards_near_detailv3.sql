@@ -1,0 +1,49 @@
+-- Migration: add content_categories to boards_near_detail
+-- ============================================================
+-- boards_near_detail is a custom RPC not in schema_current.sql.
+-- This shows the two additions needed. Incorporate them into your
+-- existing CREATE OR REPLACE FUNCTION body.
+--
+-- 1. Add to RETURNS TABLE:
+--      content_categories text[],
+--
+-- 2. Add to SELECT (boards_near_detail already joins board_flyers
+--    and events to compute active_flyer_count and popular_tags —
+--    add this alongside those aggregates):
+--
+--      ARRAY_REMOVE(
+--        ARRAY_AGG(DISTINCT e.event_category ORDER BY e.event_category),
+--        NULL
+--      ) AS content_categories,
+--
+-- ARRAY_REMOVE strips nulls so the frontend gets a clean array
+-- (or an empty array, never an array containing null).
+--
+-- If boards_near_detail does not yet join events directly, add:
+--
+--   LEFT JOIN board_flyers bf ON bf.board_id = b.id AND bf.is_active = true
+--   LEFT JOIN events e        ON e.id = bf.event_id AND e.is_active = true
+--
+-- ── Category ordering note ──────────────────────────────────────
+-- ORDER BY e.event_category inside ARRAY_AGG gives alphabetical
+-- order, which is fine. If you later want to order by frequency
+-- (most-flyers-first), replace with a subquery:
+--
+--   ARRAY(
+--     SELECT ec.cat
+--     FROM (
+--       SELECT e2.event_category AS cat, COUNT(*) AS n
+--       FROM board_flyers bf2
+--       JOIN events e2 ON e2.id = bf2.event_id
+--         AND e2.is_active = true
+--         AND e2.event_category IS NOT NULL
+--       WHERE bf2.board_id = b.id AND bf2.is_active = true
+--       GROUP BY e2.event_category
+--       ORDER BY n DESC
+--     ) ec
+--   ) AS content_categories,
+--
+-- The frequency-ordered version is better UX for boards with many
+-- categories (most prominent category first in the chip row), but
+-- costs more — defer until the simpler version is live.
+-- ============================================================
