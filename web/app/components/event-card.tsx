@@ -412,7 +412,7 @@ export function EventCard({ event }: { event: Event }) {
                             </div>
                             {b.lat && b.lng && (
                               <a
-                                href={`https://www.google.com/maps/search/?api=1&query=${b.lat},${b.lng}`}
+                                href={`https://www.openstreetmap.org/?mlat=${b.lat}&mlon=${b.lng}#map=18/${b.lat}/${b.lng}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-xs text-content-muted hover:text-content-secondary transition-colors shrink-0 self-start"
