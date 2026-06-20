@@ -5,6 +5,8 @@ import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { categoryColor, hexToRgba } from '@/lib/categories'
+import { seenAgo, staleness } from '@/lib/dates'
+import { sourceDomain } from '@/lib/format'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -125,26 +127,6 @@ function formatFoundDate(dateStr: string, timeStr?: string | null): string {
     return `${datePart} · ${formatTime(h, m)}`
   }
   return datePart
-}
-
-function seenAgo(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
-  if (days === 0) return 'seen today'
-  if (days === 1) return 'seen yesterday'
-  return `seen ${days}d ago`
-}
-
-function boardStaleness(iso: string): { label: string; fresh: boolean } {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
-  if (days === 0) return { label: 'seen today',        fresh: true  }
-  if (days === 1) return { label: 'seen yesterday',    fresh: true  }
-  if (days <= 5)  return { label: `seen ${days}d ago`, fresh: true  }
-  return             { label: `seen ${days}d ago`,     fresh: false }
-}
-
-function sourceDomain(url: string): string {
-  try { return new URL(url).hostname.replace(/^www\./, '') }
-  catch { return url }
 }
 
 function formatTalent(talent: TalentEntry[]): string | null {
@@ -298,7 +280,7 @@ export function EventCard({ event }: { event: Event }) {
           </p>
         )}
 
-        {/* Flyer link — flyer data, shown on its own line */}
+        {/* Flyer link */}
         {linkHref && (
           <a
             href={linkHref}
@@ -367,9 +349,6 @@ export function EventCard({ event }: { event: Event }) {
               <p className="text-xs text-content-muted">Loading…</p>
             ) : (
               <>
-                {/* Board locations.
-                    Primary answer for minimal events — the board has what the
-                    flyer intentionally left out. Secondary context for others. */}
                 {data && data.boards.length > 0 ? (
                   <div>
                     {isMinimal && (
@@ -379,21 +358,18 @@ export function EventCard({ event }: { event: Event }) {
                     )}
                     <ul className="space-y-2">
                       {data.boards.map((b) => {
-                        const { label, fresh } = boardStaleness(b.last_seen_at)
+                        const { label, fresh } = staleness(b.last_seen_at)
                         return (
                           <li key={b.board_id} className="flex items-start justify-between gap-4">
                             <div className="flex flex-col gap-0.5 min-w-0">
-                              {/* location_name as primary label when present */}
                               <span className="text-sm text-content-secondary">
                                 {b.location_name ?? b.board_description ?? '(unnamed board)'}
                               </span>
-                              {/* board_description as navigation sub-line when location_name is set */}
                               {b.location_name && b.board_description && (
                                 <span className="text-xs text-content-muted">
                                   {b.board_description}
                                 </span>
                               )}
-                              {/* managed_by and entry note when no location_name */}
                               {!b.location_name && (b.managed_by || b.requires_entry_to_photograph) && (
                                 <span className="text-xs text-content-muted">
                                   {[
@@ -402,7 +378,6 @@ export function EventCard({ event }: { event: Event }) {
                                   ].filter(Boolean).join(' · ')}
                                 </span>
                               )}
-                              {/* entry note always shown when location_name is present */}
                               {b.location_name && b.requires_entry_to_photograph && (
                                 <span className="text-xs text-content-muted">go inside</span>
                               )}
@@ -429,8 +404,6 @@ export function EventCard({ event }: { event: Event }) {
                   <p className="text-xs text-red-400/50">board data unavailable</p>
                 ) : null}
 
-                {/* Found online — enrichment data only, never for minimal events.
-                    Clearly separated from board locations and labeled as supplementary. */}
                 {!isMinimal && hasSupplements && supplements && (
                   <div className="space-y-1.5">
                     <p className="text-xs text-content-muted">Found online</p>

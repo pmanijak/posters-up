@@ -2,17 +2,34 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { CITY_COOKIE } from '@/lib/constants'
 import type { CityOption } from './city-picker'
 
 interface PageHeaderProps {
-  cityLabel:  string | null
-  cities:     CityOption[]
-  isDetected: boolean
+  cityLabel:   string | null
+  cities:      CityOption[]
+  isDetected:  boolean
+  // Text before the city picker button. Defaults to the events-page phrasing.
+  subtitle?:   string
+  // When provided, called on city/geo pick instead of router.push('/?...').
+  // Lets client pages (boards) re-fetch without a full navigation.
+  // label is a city name (string) or null when the pick came from geolocation.
+  onCityPick?: (lat: number, lng: number, label: string | null) => void
+  // Replaces the default "+ Submit photo" link when provided.
+  rightSlot?:  React.ReactNode
 }
 
 type DetectState = 'idle' | 'detecting' | 'error'
 
-export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
+export function PageHeader({
+  cityLabel,
+  cities,
+  isDetected,
+  subtitle = 'Events from the bulletin boards around',
+  onCityPick,
+  rightSlot,
+}: PageHeaderProps) {
   const [open, setOpen]               = useState(false)
   const [detectState, setDetectState] = useState<DetectState>('idle')
   const router = useRouter()
@@ -26,20 +43,26 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
     return () => document.removeEventListener('keydown', onKey)
   }, [open])
 
-  function pick(lat: number, lng: number) {
+  // label is the city name for a manual pick, null for geolocation.
+  function pick(lat: number, lng: number, label: string | null) {
     document.cookie = [
-      `postersup_city=${lat.toFixed(4)},${lng.toFixed(4)}`,
+      `${CITY_COOKIE}=${lat.toFixed(4)},${lng.toFixed(4)}`,
       'max-age=2592000',
       'path=/',
       'SameSite=Lax',
       'Secure',
     ].join('; ')
-    const params = new URLSearchParams()
-    params.set('lat', lat.toFixed(4))
-    params.set('lng', lng.toFixed(4))
     setDetectState('idle')
     setOpen(false)
-    router.push(`/?${params.toString()}`)
+
+    if (onCityPick) {
+      onCityPick(lat, lng, label)
+    } else {
+      const params = new URLSearchParams()
+      params.set('lat', lat.toFixed(4))
+      params.set('lng', lng.toFixed(4))
+      router.push(`/?${params.toString()}`)
+    }
   }
 
   function openTray() {
@@ -53,7 +76,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
   }
 
   function pickCity(city: CityOption) {
-    pick(city.lat, city.lng)
+    pick(city.lat, city.lng, city.label)
   }
 
   function detectLocation() {
@@ -64,7 +87,7 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
     setDetectState('detecting')
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        pick(pos.coords.latitude, pos.coords.longitude)
+        pick(pos.coords.latitude, pos.coords.longitude, null)
       },
       () => {
         setDetectState('error')
@@ -72,7 +95,8 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
     )
   }
 
-  const label = cityLabel ?? 'your area'
+  // null cityLabel after geo → "your location"; null without geo → "your area"
+  const label = cityLabel ?? (isDetected ? 'your location' : 'your area')
 
   return (
     <div>
@@ -81,10 +105,10 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
           <div className="flex items-baseline justify-between">
             <div>
               <h1 className="font-marker text-3xl text-content-primary">
-                Posters Up
+                <Link href="/">Posters Up</Link>
               </h1>
               <div className="text-sm mt-0.5 text-content-muted">
-                Events from the bulletin boards around{' '}
+                {subtitle}{' '}
                 <button
                   onClick={() => (open ? closeAndReset() : openTray())}
                   className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors"
@@ -96,12 +120,15 @@ export function PageHeader({ cityLabel, cities, isDetected }: PageHeaderProps) {
                 </button>
               </div>
             </div>
-            <a
-              href="/upload"
-              className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
-            >
-              + Submit photo
-            </a>
+
+            {rightSlot !== undefined ? rightSlot : (
+              <Link
+                href="/upload"
+                className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
+              >
+                + Submit photo
+              </Link>
+            )}
           </div>
         </div>
       </header>
