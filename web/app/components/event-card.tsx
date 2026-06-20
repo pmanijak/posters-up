@@ -52,6 +52,10 @@ interface BoardLocation {
   board_id: string
   board_description: string | null
   last_seen_at: string
+  lat: number
+  lng: number
+  managed_by: string | null
+  requires_entry_to_photograph: boolean | null
 }
 
 interface EnrichmentFound {
@@ -119,6 +123,14 @@ function seenAgo(iso: string): string {
   return `seen ${days}d ago`
 }
 
+function boardStaleness(iso: string): { label: string; fresh: boolean } {
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
+  if (days === 0) return { label: 'confirmed today',    fresh: true  }
+  if (days === 1) return { label: 'confirmed yesterday', fresh: true  }
+  if (days <= 5)  return { label: `confirmed ${days}d ago`, fresh: true  }
+  return             { label: `confirmed ${days}d ago`, fresh: false }
+}
+
 function sourceDomain(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, '') }
   catch { return url }
@@ -129,8 +141,6 @@ function formatTalent(talent: TalentEntry[]): string | null {
   return talent.map((t) => t.name).join(' · ')
 }
 
-// Wraps every case-insensitive occurrence of query in the text with an
-// accent-colored span. Returns the original string when there are no matches.
 function highlightText(text: string, query: string, color: string): ReactNode {
   if (!query.trim()) return text
   const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -190,7 +200,8 @@ export function EventCard({ event }: { event: Event }) {
     ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
     : null
 
-  const hasSomethingToShow = linkHref !== null 
+  // Show the expand button when there's a link OR when boards exist to surface
+  const hasSomethingToShow = linkHref !== null || event.sighting_count > 0
 
   function tagHref(tag: string): string {
     const params = new URLSearchParams(searchParams.toString())
@@ -277,7 +288,7 @@ export function EventCard({ event }: { event: Event }) {
           </p>
         )}
 
-        {/* Tags — highlighted when they match the active query */}
+        {/* Tags */}
         {event.tags && event.tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2">
             {event.tags.slice(0, 6).map((tag) => (
@@ -333,34 +344,54 @@ export function EventCard({ event }: { event: Event }) {
               <p className="text-xs text-content-muted">Loading…</p>
             ) : (
               <>
-                {/* SPOTTED AT
+                {/* Board locations.
                     Primary answer for minimal events — the board has what the
                     flyer intentionally left out. Secondary context for others. */}
                 {data && data.boards.length > 0 ? (
                   <div>
-                    <p className="text-xs font-mono tracking-wider text-content-muted mb-2">
-                      SPOTTED AT
-                    </p>
-                    <ul className="space-y-2">
-                      {data.boards.map((b) => (
-                        <li key={b.board_id} className="flex items-baseline justify-between gap-4">
-                          <span className="text-sm text-content-secondary">
-                            {b.board_description ?? '(unnamed board)'}
-                          </span>
-                          <span className="text-xs text-content-muted shrink-0">
-                            {seenAgo(b.last_seen_at)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
                     {isMinimal && (
-                      <p className="text-xs text-content-muted mt-2">
-                        This flyer is intentionally minimal — the board will have more.
+                      <p className="text-xs text-content-muted mb-2">
+                        This flyer is your best source of info
                       </p>
                     )}
+                    <ul className="space-y-2">
+                      {data.boards.map((b) => {
+                        const { label, fresh } = boardStaleness(b.last_seen_at)
+                        return (
+                          <li key={b.board_id} className="flex items-start justify-between gap-4">
+                            <div className="flex flex-col gap-0.5 min-w-0">
+                              <span className="text-sm text-content-secondary">
+                                {b.board_description ?? '(unnamed board)'}
+                              </span>
+                              {(b.managed_by || b.requires_entry_to_photograph) && (
+                                <span className="text-xs text-content-muted">
+                                  {[
+                                    b.managed_by,
+                                    b.requires_entry_to_photograph ? 'go inside' : null,
+                                  ].filter(Boolean).join(' · ')}
+                                </span>
+                              )}
+                              <span className={`text-xs ${fresh ? 'text-content-accent' : 'text-content-muted'}`}>
+                                {label}
+                              </span>
+                            </div>
+                            {b.lat && b.lng && (
+                              <a
+                                href={`https://www.google.com/maps/search/?api=1&query=${b.lat},${b.lng}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-content-muted hover:text-content-secondary transition-colors shrink-0 self-start"
+                              >
+                                Map →
+                              </a>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
                   </div>
                 ) : data ? (
-                  <p className="text-xs text-content-muted">No active boards on file.</p>
+                  <p className="text-xs text-red-400/50">board data unavailable</p>
                 ) : null}
 
                 {/* Found values — only what's missing from the flyer.

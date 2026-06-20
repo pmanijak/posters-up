@@ -67,9 +67,9 @@ export default function UploadPage() {
   const supabase = createClient()
 
   // Auth
-  const [email, setEmail]   = useState('')
-  const [sent, setSent]     = useState(false)
-  const [user, setUser]     = useState<any>(null)
+  const [email, setEmail]     = useState('')
+  const [sent, setSent]       = useState(false)
+  const [user, setUser]       = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
   // Upload
@@ -79,11 +79,12 @@ export default function UploadPage() {
   const [showRaw, setShowRaw]     = useState(false)
 
   // Board details submission
-  const [description, setDescription]           = useState('')
-  const [isIndoor, setIsIndoor]                 = useState<boolean | null>(null)
-  const [submittingBoard, setSubmittingBoard]   = useState(false)
-  const [boardSubmitted, setBoardSubmitted]     = useState(false)
-  const [boardError, setBoardError]             = useState<string | null>(null)
+  const [description, setDescription]                           = useState('')
+  const [requiresEntryToPhotograph, setRequiresEntryToPhotograph] = useState<boolean | null>(null)
+  const [requiresEntryToPost, setRequiresEntryToPost]           = useState<boolean | null>(null)
+  const [submittingBoard, setSubmittingBoard]                   = useState(false)
+  const [boardSubmitted, setBoardSubmitted]                     = useState(false)
+  const [boardError, setBoardError]                             = useState<string | null>(null)
 
   const { progress, complete, reset } = useProgress(uploading)
 
@@ -99,7 +100,8 @@ export default function UploadPage() {
     if (!results?.board_id) return
     setBoardSubmitted(false)
     setBoardError(null)
-    setIsIndoor(null)
+    setRequiresEntryToPhotograph(null)
+    setRequiresEntryToPost(null)
 
     supabase
       .from('boards')
@@ -178,9 +180,8 @@ export default function UploadPage() {
   async function submitBoardDetails() {
     if (!results?.board_id) return
 
-    // At least one field required — mirrors the DB CHECK constraint.
     const trimmed = description.trim()
-    if (!trimmed && isIndoor === null) return
+    if (!trimmed && requiresEntryToPhotograph === null && requiresEntryToPost === null) return
 
     setSubmittingBoard(true)
     setBoardError(null)
@@ -188,9 +189,10 @@ export default function UploadPage() {
     const { error } = await supabase
       .from('board_submissions')
       .insert({
-        board_id:    results.board_id,
-        description: trimmed || null,
-        is_indoor:   isIndoor,
+        board_id:                     results.board_id,
+        description:                  trimmed || null,
+        requires_entry_to_photograph: requiresEntryToPhotograph,
+        requires_entry_to_post:       requiresEntryToPost,
       })
 
     setSubmittingBoard(false)
@@ -202,7 +204,10 @@ export default function UploadPage() {
     }
   }
 
-  const boardDetailsReady = description.trim().length > 0 || isIndoor !== null
+  const boardDetailsReady =
+    description.trim().length > 0 ||
+    requiresEntryToPhotograph !== null ||
+    requiresEntryToPost !== null
 
   if (loading) return (
     <div className="min-h-screen bg-surface-page" />
@@ -374,16 +379,47 @@ export default function UploadPage() {
                   />
                 </div>
 
+                {/* Requires entry to photograph */}
                 <div className="space-y-1.5">
-                  <label className="text-xs text-content-secondary">Indoors?</label>
+                  <label className="text-xs text-content-secondary">
+                    Did you need to go inside to photograph it?
+                  </label>
                   <div className="flex items-center gap-2">
                     {([true, false, null] as const).map((val) => {
-                      const label = val === true ? 'Yes' : val === false ? 'No' : 'Not sure'
-                      const active = isIndoor === val
+                      const label  = val === true ? 'Yes' : val === false ? 'No' : 'Not sure'
+                      const active = requiresEntryToPhotograph === val
                       return (
                         <button
                           key={label}
-                          onClick={() => !boardSubmitted && setIsIndoor(val)}
+                          onClick={() => !boardSubmitted && setRequiresEntryToPhotograph(val)}
+                          disabled={boardSubmitted}
+                          className={[
+                            'px-3 py-1.5 rounded text-xs transition-colors disabled:opacity-50',
+                            active
+                              ? 'bg-content-secondary text-surface-page'
+                              : 'bg-surface-page border border-edge text-content-muted hover:border-edge-subtle',
+                          ].join(' ')}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Requires entry to post */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-content-secondary">
+                    Would someone need to go inside to post here?
+                  </label>
+                  <div className="flex items-center gap-2">
+                    {([true, false, null] as const).map((val) => {
+                      const label  = val === true ? 'Yes' : val === false ? 'No' : 'Not sure'
+                      const active = requiresEntryToPost === val
+                      return (
+                        <button
+                          key={label}
+                          onClick={() => !boardSubmitted && setRequiresEntryToPost(val)}
                           disabled={boardSubmitted}
                           className={[
                             'px-3 py-1.5 rounded text-xs transition-colors disabled:opacity-50',
@@ -412,7 +448,7 @@ export default function UploadPage() {
                     </button>
                     {!boardDetailsReady && (
                       <span className="text-xs text-content-muted">
-                        Add a location or indoor status to submit.
+                        Add a location or access info to submit.
                       </span>
                     )}
                   </div>
