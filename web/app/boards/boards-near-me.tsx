@@ -247,7 +247,8 @@ export default function BoardsNearMe({
   // Don't set panToBoard — that's what was causing the jump.
   function handleMarkerClick(id: string) {
     setActiveBoard(id)
-    setShowMap(false)
+    // removed setShowMap(false) — on mobile, marker click should show the popup,
+    // not jump to the list. Card will be highlighted if user switches to list manually.
     const el = listRef.current?.querySelector<HTMLElement>(`[data-board-id="${id}"]`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
