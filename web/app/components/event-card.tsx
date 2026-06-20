@@ -125,7 +125,7 @@ function seenAgo(iso: string): string {
 
 function boardStaleness(iso: string): { label: string; fresh: boolean } {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
-  if (days === 0) return { label: 'seen today',    fresh: true  }
+  if (days === 0) return { label: 'seen today',     fresh: true  }
   if (days === 1) return { label: 'seen yesterday', fresh: true  }
   if (days <= 5)  return { label: `seen ${days}d ago`, fresh: true  }
   return             { label: `seen ${days}d ago`, fresh: false }
@@ -200,7 +200,6 @@ export function EventCard({ event }: { event: Event }) {
     ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
     : null
 
-  // Show the expand button when there's a link OR when boards exist to surface
   const hasSomethingToShow = linkHref !== null || event.sighting_count > 0
 
   function tagHref(tag: string): string {
@@ -286,6 +285,19 @@ export function EventCard({ event }: { event: Event }) {
           <p className="text-sm mt-1.5 text-content-muted">
             {detailParts.join(' · ')}
           </p>
+        )}
+
+        {/* Flyer link — flyer data, shown on its own line */}
+        {linkHref && (
+          <a
+            href={linkHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block text-xs mt-1.5"
+            style={{ color: accentColor }}
+          >
+            {sourceDomain(linkHref)} →
+          </a>
         )}
 
         {/* Tags */}
@@ -394,10 +406,11 @@ export function EventCard({ event }: { event: Event }) {
                   <p className="text-xs text-red-400/50">board data unavailable</p>
                 ) : null}
 
-                {/* Found values — only what's missing from the flyer.
-                    Never shown for minimal events. */}
+                {/* Found online — enrichment data only, never for minimal events.
+                    Clearly separated from board locations and labeled as supplementary. */}
                 {!isMinimal && hasSupplements && supplements && (
                   <div className="space-y-1.5">
+                    <p className="text-xs text-content-muted">Found online</p>
                     {supplements.date && (
                       <p className="text-sm text-content-secondary">{supplements.date}</p>
                     )}
@@ -421,19 +434,6 @@ export function EventCard({ event }: { event: Event }) {
                       </a>
                     )}
                   </div>
-                )}
-
-                {/* Flyer's own external link */}
-                {linkHref && (
-                  <a
-                    href={linkHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block text-xs"
-                    style={{ color: accentColor }}
-                  >
-                    More info →
-                  </a>
                 )}
               </>
             )}
