@@ -50,6 +50,7 @@ interface Event {
 
 interface BoardLocation {
   board_id: string
+  location_name: string | null
   board_description: string | null
   last_seen_at: string
   lat: number
@@ -125,10 +126,10 @@ function seenAgo(iso: string): string {
 
 function boardStaleness(iso: string): { label: string; fresh: boolean } {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
-  if (days === 0) return { label: 'seen today',     fresh: true  }
-  if (days === 1) return { label: 'seen yesterday', fresh: true  }
+  if (days === 0) return { label: 'seen today',        fresh: true  }
+  if (days === 1) return { label: 'seen yesterday',    fresh: true  }
   if (days <= 5)  return { label: `seen ${days}d ago`, fresh: true  }
-  return             { label: `seen ${days}d ago`, fresh: false }
+  return             { label: `seen ${days}d ago`,     fresh: false }
 }
 
 function sourceDomain(url: string): string {
@@ -372,16 +373,28 @@ export function EventCard({ event }: { event: Event }) {
                         return (
                           <li key={b.board_id} className="flex items-start justify-between gap-4">
                             <div className="flex flex-col gap-0.5 min-w-0">
+                              {/* location_name as primary label when present */}
                               <span className="text-sm text-content-secondary">
-                                {b.board_description ?? '(unnamed board)'}
+                                {b.location_name ?? b.board_description ?? '(unnamed board)'}
                               </span>
-                              {(b.managed_by || b.requires_entry_to_photograph) && (
+                              {/* board_description as navigation sub-line when location_name is set */}
+                              {b.location_name && b.board_description && (
+                                <span className="text-xs text-content-muted">
+                                  {b.board_description}
+                                </span>
+                              )}
+                              {/* managed_by and entry note when no location_name */}
+                              {!b.location_name && (b.managed_by || b.requires_entry_to_photograph) && (
                                 <span className="text-xs text-content-muted">
                                   {[
                                     b.managed_by,
                                     b.requires_entry_to_photograph ? 'go inside' : null,
                                   ].filter(Boolean).join(' · ')}
                                 </span>
+                              )}
+                              {/* entry note always shown when location_name is present */}
+                              {b.location_name && b.requires_entry_to_photograph && (
+                                <span className="text-xs text-content-muted">go inside</span>
                               )}
                               <span className={`text-xs ${fresh ? 'text-content-accent' : 'text-content-muted'}`}>
                                 {label}

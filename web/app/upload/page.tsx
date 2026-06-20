@@ -79,12 +79,13 @@ export default function UploadPage() {
   const [showRaw, setShowRaw]     = useState(false)
 
   // Board details submission
-  const [description, setDescription]                           = useState('')
-  const [requiresEntryToPhotograph, setRequiresEntryToPhotograph] = useState<boolean | null>(null)
-  const [requiresEntryToPost, setRequiresEntryToPost]           = useState<boolean | null>(null)
-  const [submittingBoard, setSubmittingBoard]                   = useState(false)
-  const [boardSubmitted, setBoardSubmitted]                     = useState(false)
-  const [boardError, setBoardError]                             = useState<string | null>(null)
+  const [locationName, setLocationName]                                 = useState('')
+  const [description, setDescription]                                   = useState('')
+  const [requiresEntryToPhotograph, setRequiresEntryToPhotograph]       = useState<boolean | null>(null)
+  const [requiresEntryToPost, setRequiresEntryToPost]                   = useState<boolean | null>(null)
+  const [submittingBoard, setSubmittingBoard]                           = useState(false)
+  const [boardSubmitted, setBoardSubmitted]                             = useState(false)
+  const [boardError, setBoardError]                                     = useState<string | null>(null)
 
   const { progress, complete, reset } = useProgress(uploading)
 
@@ -95,7 +96,7 @@ export default function UploadPage() {
     })
   })
 
-  // When a board_id comes back, fetch its existing description to pre-populate.
+  // When a board_id comes back, fetch its existing values to pre-populate.
   useEffect(() => {
     if (!results?.board_id) return
     setBoardSubmitted(false)
@@ -105,10 +106,11 @@ export default function UploadPage() {
 
     supabase
       .from('boards')
-      .select('description')
+      .select('location_name, description')
       .eq('id', results.board_id)
       .maybeSingle()
       .then(({ data }) => {
+        setLocationName(data?.location_name ?? '')
         setDescription(data?.description ?? '')
       })
   }, [results?.board_id])
@@ -180,8 +182,9 @@ export default function UploadPage() {
   async function submitBoardDetails() {
     if (!results?.board_id) return
 
-    const trimmed = description.trim()
-    if (!trimmed && requiresEntryToPhotograph === null && requiresEntryToPost === null) return
+    const trimmedName = locationName.trim()
+    const trimmedDesc = description.trim()
+    if (!trimmedName && !trimmedDesc && requiresEntryToPhotograph === null && requiresEntryToPost === null) return
 
     setSubmittingBoard(true)
     setBoardError(null)
@@ -190,7 +193,8 @@ export default function UploadPage() {
       .from('board_submissions')
       .insert({
         board_id:                     results.board_id,
-        description:                  trimmed || null,
+        location_name:                trimmedName || null,
+        description:                  trimmedDesc || null,
         requires_entry_to_photograph: requiresEntryToPhotograph,
         requires_entry_to_post:       requiresEntryToPost,
       })
@@ -205,6 +209,7 @@ export default function UploadPage() {
   }
 
   const boardDetailsReady =
+    locationName.trim().length > 0 ||
     description.trim().length > 0 ||
     requiresEntryToPhotograph !== null ||
     requiresEntryToPost !== null
@@ -367,13 +372,27 @@ export default function UploadPage() {
                   </p>
                 </div>
 
+                {/* Business or place name */}
                 <div className="space-y-1.5">
-                  <label className="text-xs text-content-secondary">Location</label>
+                  <label className="text-xs text-content-secondary">Business or place name</label>
+                  <input
+                    type="text"
+                    value={locationName}
+                    onChange={e => setLocationName(e.target.value)}
+                    disabled={boardSubmitted}
+                    placeholder="e.g. Rainy Day Records, Olympia Timberland Library"
+                    className="w-full bg-surface-page border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle disabled:opacity-50"
+                  />
+                </div>
+
+                {/* Navigation description */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-content-secondary">Where exactly</label>
                   <textarea
                     value={description}
                     onChange={e => setDescription(e.target.value)}
                     disabled={boardSubmitted}
-                    placeholder="e.g. Inside Rainy Day Records on 5th Ave, on the wall left of the front door"
+                    placeholder="e.g. outside the front door on 4th Ave, next to the window"
                     rows={2}
                     className="w-full bg-surface-page border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle resize-none disabled:opacity-50"
                   />

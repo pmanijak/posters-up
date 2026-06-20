@@ -11,6 +11,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 interface Submission {
   id:                           string;
   board_id:                     string;
+  location_name:                string | null;
   description:                  string | null;
   requires_entry_to_photograph: boolean | null;
   requires_entry_to_post:       boolean | null;
@@ -24,8 +25,8 @@ interface ReviewResult {
 
 // ============================================================
 // REVIEW WITHOUT API
-// Used when the submission has no description — only entry flags.
-// Nothing to correct; approve immediately without an API call.
+// Used when neither location_name nor description is present —
+// only entry flags. Nothing to review; approve immediately.
 // ============================================================
 
 function reviewWithoutDescription(): ReviewResult {
@@ -38,37 +39,48 @@ function reviewWithoutDescription(): ReviewResult {
 
 // ============================================================
 // REVIEW WITH API
-// Called when the submission includes a description.
-// Claude checks whether it reads as a real navigation hint
+// Called when the submission includes a location_name or description.
+// Claude checks whether the description reads as a real navigation hint
 // and corrects mechanical errors (typos, capitalization).
+// location_name is passed as context but not corrected — proper nouns
+// are the contributor's call.
 // Returns structured JSON — no prose, no explanation.
 // ============================================================
 
 async function reviewWithAPI(submission: Submission): Promise<ReviewResult> {
-  const entryLines: string[] = [];
+  const contextLines: string[] = [];
+  if (submission.location_name) {
+    contextLines.push(`Business or place name: "${submission.location_name}"`);
+  }
   if (submission.requires_entry_to_photograph !== null) {
-    entryLines.push(`Requires entry to photograph: ${submission.requires_entry_to_photograph}`);
+    contextLines.push(`Requires entry to photograph: ${submission.requires_entry_to_photograph}`);
   }
   if (submission.requires_entry_to_post !== null) {
-    entryLines.push(`Requires entry to post: ${submission.requires_entry_to_post}`);
+    contextLines.push(`Requires entry to post: ${submission.requires_entry_to_post}`);
   }
-  const entryNote = entryLines.length > 0 ? "\n" + entryLines.join("\n") : "";
+  const contextNote = contextLines.length > 0 ? "\n" + contextLines.join("\n") : "";
+
+  const descriptionSection = submission.description
+    ? `Contributor's location description: "${submission.description}"`
+    : `Contributor's location description: (none provided)`;
 
   const prompt = `You are reviewing a contributor submission for a community bulletin board app called Posters Up. The contributor was standing at a physical bulletin board and submitted what they observed.
 
-Contributor's description: "${submission.description}"${entryNote}
+${descriptionSection}${contextNote}
 
 Your job:
 
-1. APPROVE or REJECT the description.
-   Approve if it would help someone navigate to the board — even vaguely.
+1. APPROVE or REJECT the submission.
+   Approve if the description (when present) would help someone navigate to the board — even vaguely.
    A street name, intersection, or named place is enough.
-   Reject only if it is clearly not a navigation hint: spam, a URL, a business name with no location context, random characters.
+   If no description was provided but a business name or entry flags were, approve — there is nothing to reject.
+   Reject only if the description is clearly not a navigation hint: spam, a URL, random characters, or content unrelated to a physical location.
    Be generous — contributors are locals writing casually. "by the door at oly food coop" is approvable.
 
-2. If approved: correct mechanical errors only.
-   Fix: misspelled words, wrong capitalization of proper nouns and street names.
+2. If approved and a description was provided: correct mechanical errors only.
+   Fix: misspelled words, wrong capitalization of street names.
    Preserve: the contributor's phrasing, word choice, local shorthand ("Oly", "the Crypt", "4th Ave"), abbreviations, and punctuation style.
+   Do NOT correct business or place names — those are the contributor's call.
    If no corrections are needed, return null for corrected_description.
    Do not rephrase. Do not improve. Only fix clear errors.
 
@@ -129,7 +141,7 @@ Deno.serve(async () => {
   // Pick the oldest pending submission
   const { data: submission, error: fetchError } = await supabase
     .from("board_submissions")
-    .select("id, board_id, description, requires_entry_to_photograph, requires_entry_to_post")
+    .select("id, board_id, location_name, description, requires_entry_to_photograph, requires_entry_to_post")
     .eq("review_status", "pending")
     .order("submitted_at", { ascending: true })
     .limit(1)
@@ -155,7 +167,7 @@ Deno.serve(async () => {
   let result: ReviewResult;
 
   try {
-    result = submission.description
+    result = (submission.location_name || submission.description)
       ? await reviewWithAPI(submission as Submission)
       : reviewWithoutDescription();
   } catch (err) {
