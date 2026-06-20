@@ -81,9 +81,13 @@ role: use the vocabulary that fits the event type —
 Use null if the flyer lists a name without describing their role.
 
 DATE TYPES
-  "specific"    — exact date; populate date_start (and date_end if range)
-  "recurring"   — repeating; populate recurrence_rule and date_raw
-  "approximate" — rough timeframe only; populate date_raw only
+  "specific"    — a defined start date is known; populate date_start and
+                  date_end if the run spans multiple days. Use this even
+                  when showtimes vary across the run — a known date range
+                  is specific.
+  "recurring"   — repeating pattern; populate recurrence_rule and date_raw
+  "approximate" — genuinely vague timeframe only ("this summer", "coming
+                  soon", "late July"); no defined start date determinable
   "unknown"     — no date information present
 
 RECURRENCE RULES (RRULE format)
@@ -96,6 +100,13 @@ Use the photo capture date from the user message to resolve relative
 dates ("this Saturday") into specific calendar dates where possible.
 If unresolvable, use date_type "approximate" and preserve the original
 text in date_raw.
+
+For multi-performance runs (a show running Thursday–Sunday, a film
+screening several nights), use date_start/date_end for the full span
+and date_type "specific". If showtimes vary by day, put the complete
+schedule in description verbatim from the flyer. Use time_start for
+the primary or most common showtime if one is clearly dominant;
+otherwise leave time_start null.
 
 PRICE
 Extract verbatim from the flyer. Never normalize or reformat.

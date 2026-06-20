@@ -88,7 +88,7 @@ export default async function DiscoverPage({
         .select('*')
         .in('id', localEventIds)
         .or(
-          `and(date_start.gte.${today},date_start.lte.${thirtyDaysOut}),date_type.in.(recurring,approximate,unknown)`
+          `and(date_start.lte.${thirtyDaysOut},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),date_type.in.(recurring,approximate,unknown)`
         )
 
       if (category && category !== 'all' && !q) {
@@ -120,10 +120,23 @@ export default async function DiscoverPage({
     const pa = DATE_TYPE_PRIORITY[a.date_type] ?? 3
     const pb = DATE_TYPE_PRIORITY[b.date_type] ?? 3
     if (pa !== pb) return pa - pb
-    if (!a.date_start && !b.date_start) return 0
-    if (!a.date_start) return 1
-    if (!b.date_start) return -1
-    return a.date_start.localeCompare(b.date_start)
+
+    // Upcoming events sort by date_start (when does it begin?).
+    // Currently-running multi-day events sort by date_end (when does it end?)
+    // so they don't permanently anchor the top of the feed for their full run.
+    // Single-day events with no date_end fall back to date_start.
+    const sortKey = (e: any): string | null => {
+      if (e.date_type !== 'specific') return null
+      if (e.date_start > today) return e.date_start
+      return e.date_end ?? e.date_start
+    }
+
+    const ka = sortKey(a)
+    const kb = sortKey(b)
+    if (!ka && !kb) return 0
+    if (!ka) return 1
+    if (!kb) return -1
+    return ka.localeCompare(kb)
   })
 
   if (q && category && category !== 'all') {
