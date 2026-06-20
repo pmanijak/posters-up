@@ -3,7 +3,7 @@
 // Imported dynamically from boards-near-me — never rendered on the server.
 // Requires: npm install leaflet react-leaflet && npm install -D @types/leaflet
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { BoardRow } from './boards-near-me'
@@ -89,7 +89,19 @@ export default function BoardsMap({
   onBoardClick: (id: string) => void
   showUserDot?: boolean
 }) {
+  // useLayoutEffect cleanup runs synchronously on unmount — important because
+  // useEffect cleanup can lose the race with the next commit when navigating.
+  // Clearing _leaflet_id prevents "Map container is being reused" on nav + back.
+  const mapWrapperRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    return () => {
+      const el = mapWrapperRef.current?.querySelector('.leaflet-container') as any
+      if (el?._leaflet_id) delete el._leaflet_id
+    }
+  }, [])
+
   return (
+    <div ref={mapWrapperRef} style={{ height: '100%', width: '100%' }}>
     <MapContainer
       center={[center.lat, center.lng]}
       zoom={14}
@@ -150,7 +162,7 @@ export default function BoardsMap({
               */}
               <div style={{ minWidth: 160, fontFamily: 'sans-serif' }}>
                 <div style={{ fontWeight: 600, marginBottom: 2, color: '#1a1a1a' }}>
-                  {board.location_name ?? board.managed_by ?? 'Unnamed board'}
+                  {board.location_name ?? 'Unnamed board'}
                 </div>
                 {board.description && (
                   <div style={{ fontSize: 12, color: '#555', marginBottom: 4, lineHeight: 1.4 }}>
@@ -175,5 +187,6 @@ export default function BoardsMap({
         )
       })}
     </MapContainer>
+    </div>
   )
 }
