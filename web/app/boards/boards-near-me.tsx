@@ -193,28 +193,11 @@ export default function BoardsNearMe({
     setLoading(false)
   }
 
-  // On mount: try geolocation; fall back to server-resolved coords on denial.
+  // On mount: use fallback coords, same as the events page.
+  // Location is opt-in via "📍 Use my location" in the city picker — not requested automatically.
   useEffect(() => {
-    if (!navigator?.geolocation) {
-      setLocationState('unavailable')
-      fetchBoards(fallbackLat, fallbackLng)
-      return
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        const { latitude: lat, longitude: lng } = coords
-        setMapCenter({ lat, lng })
-        setLocationState('granted')
-        setCityLabel(null) // PageHeader shows "your location" when isDetected + null label
-        fetchBoards(lat, lng)
-      },
-      () => {
-        setLocationState('denied')
-        fetchBoards(fallbackLat, fallbackLng)
-      },
-      { timeout: 8000, maximumAge: 60_000 }
-    )
+    setLocationState('denied')
+    fetchBoards(fallbackLat, fallbackLng)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mount the map only when it has a visible container to render into.
