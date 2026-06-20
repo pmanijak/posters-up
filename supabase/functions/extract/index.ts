@@ -17,6 +17,8 @@ RULES
   band flyer is clearly "music" even without a label. Use judgment.
 - Crossed-out or struck-through text is a retraction, not a value.
   Do not use it as the current field value. See CROSSED-OUT TEXT.
+- Do not extract hours of operation, business hours, or opening hours as events.
+  "Open Mon–Sat 10am–6pm" is venue metadata, not a recurring event. Skip it.
 - Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
 
 CONTENT TYPES
