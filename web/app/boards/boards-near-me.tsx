@@ -268,7 +268,7 @@ export default function BoardsNearMe({
         cityLabel={cityLabel}
         cities={cities}
         isDetected={locationState === 'granted'}
-        subtitle="Boards near"
+        subtitle="Bulletin boards around"
         onCityPick={handleCityPick}
         rightSlot={
           <div className="flex items-center gap-3">
@@ -282,7 +282,7 @@ export default function BoardsNearMe({
               href="/upload"
               className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
             >
-              + Submit photo
+              Submit photo
             </Link>
           </div>
         }

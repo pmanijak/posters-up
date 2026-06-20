@@ -122,12 +122,20 @@ export function PageHeader({
             </div>
 
             {rightSlot !== undefined ? rightSlot : (
-              <Link
-                href="/upload"
-                className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
-              >
-                + Submit photo
-              </Link>
+              <div className="flex items-center gap-3">
+                <Link
+                  href="/upload"
+                  className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
+                >
+                  Submit photo
+                </Link>
+                <Link
+                  href="/boards"
+                  className="text-xs text-content-muted hover:text-content-secondary transition-colors"
+                >
+                  Boards →
+                </Link>
+              </div>
             )}
           </div>
         </div>
