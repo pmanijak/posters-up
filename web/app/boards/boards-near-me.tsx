@@ -247,8 +247,8 @@ export default function BoardsNearMe({
   // Don't set panToBoard — that's what was causing the jump.
   function handleMarkerClick(id: string) {
     setActiveBoard(id)
-    // removed setShowMap(false) — on mobile, marker click should show the popup,
-    // not jump to the list. Card will be highlighted if user switches to list manually.
+    // No setShowMap — on mobile, marker click shows the popup in place.
+    // scrollIntoView is a no-op when the list panel is hidden; useful on desktop.
     const el = listRef.current?.querySelector<HTMLElement>(`[data-board-id="${id}"]`)
     el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
@@ -263,7 +263,7 @@ export default function BoardsNearMe({
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-screen bg-surface-page">
+    <div className="flex flex-col bg-surface-page" style={{ height: '100dvh' }}>
 
       <PageHeader
         cityLabel={cityLabel}
@@ -315,7 +315,7 @@ export default function BoardsNearMe({
         {/* List panel */}
         <div
           ref={listRef}
-          className={`w-full md:w-[600px] md:flex-shrink-0 overflow-y-auto ${
+          className={`w-full md:w-[600px] md:flex-shrink-0 overflow-y-auto touch-pan-y ${
             showMap ? 'hidden md:block' : 'block'
           }`}
         >
