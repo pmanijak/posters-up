@@ -575,7 +575,6 @@ Deno.serve(async (req) => {
   // ── Write extracted items to DB ───────────────────────────────────────────
   const results: { event_id: string; name: string; match_type?: string }[] = [];
   const skipped: { name: string; reason: string }[] = [];
-  const seenEventIds = new Set<string>();
 
   for (const item of extractedItems) {
     if (!item.name) {
@@ -759,8 +758,6 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    seenEventIds.add(eventId);
-
     // ── Sighting ──────────────────────────────────────────────────────────
     const { error: sightingError } = await supabase.from("event_sightings").insert({
       event_id: eventId,
@@ -859,39 +856,6 @@ Deno.serve(async (req) => {
     }
 
     results.push({ event_id: eventId, name: item.name, match_type: matchType });
-  }
-
-  // ── Mark removed flyers ───────────────────────────────────────────────────
-  if (resolvedBoardId && seenEventIds.size > 0) {
-    const { data: activeFlyers, error: activeFlyersError } = await supabase
-      .from("board_flyers")
-      .select("event_id")
-      .eq("board_id", resolvedBoardId)
-      .eq("is_active", true);
-
-    if (activeFlyersError) {
-      warnings.push(`Could not fetch active flyers for removal check: ${activeFlyersError.message}`);
-      console.error("Active flyers fetch error:", JSON.stringify(activeFlyersError));
-    } else {
-      const removedIds = (activeFlyers ?? [])
-        .map((f: any) => f.event_id)
-        .filter((id: string) => !seenEventIds.has(id));
-
-      if (removedIds.length > 0) {
-        const { error: removalError } = await supabase
-          .from("board_flyers")
-          .update({ is_active: false, removed_at: new Date().toISOString() })
-          .eq("board_id", resolvedBoardId)
-          .in("event_id", removedIds);
-
-        if (removalError) {
-          warnings.push(`Flyer removal update failed for ${removedIds.length} flyers: ${removalError.message}`);
-          console.error("Flyer removal error:", JSON.stringify(removalError));
-        } else {
-          console.log(`Marked ${removedIds.length} flyers as removed`);
-        }
-      }
-    }
   }
 
   // ── Done ──────────────────────────────────────────────────────────────────
