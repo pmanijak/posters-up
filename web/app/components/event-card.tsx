@@ -125,10 +125,10 @@ function seenAgo(iso: string): string {
 
 function boardStaleness(iso: string): { label: string; fresh: boolean } {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
-  if (days === 0) return { label: 'confirmed today',    fresh: true  }
-  if (days === 1) return { label: 'confirmed yesterday', fresh: true  }
-  if (days <= 5)  return { label: `confirmed ${days}d ago`, fresh: true  }
-  return             { label: `confirmed ${days}d ago`, fresh: false }
+  if (days === 0) return { label: 'seen today',    fresh: true  }
+  if (days === 1) return { label: 'seen yesterday', fresh: true  }
+  if (days <= 5)  return { label: `seen ${days}d ago`, fresh: true  }
+  return             { label: `seen ${days}d ago`, fresh: false }
 }
 
 function sourceDomain(url: string): string {
