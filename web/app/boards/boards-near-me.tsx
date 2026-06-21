@@ -177,6 +177,9 @@ export default function BoardsNearMe({
   const [panToBoard, setPanToBoard]       = useState<string | null>(null)
   const [showMap, setShowMap]             = useState(false)
   const [mapReady, setMapReady]           = useState(false)
+  // Unique per mount — forces a fresh DOM subtree for the map panel on each
+  // page visit, preventing Leaflet's "container being reused" error.
+  const [mapKey]                          = useState(() => Date.now())
 
   const listRef  = useRef<HTMLDivElement>(null)
   const supabase = createClient()
@@ -330,7 +333,7 @@ export default function BoardsNearMe({
         </div>
 
         {/* Map panel */}
-        <div className={`flex-1 min-w-0 ${showMap ? 'block' : 'hidden md:block'}`}>
+        <div key={mapKey} className={`flex-1 min-w-0 ${showMap ? 'block' : 'hidden md:block'}`}>
           {mapReady && (
             <BoardsMap
               boards={boards}

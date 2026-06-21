@@ -3,7 +3,7 @@
 // Imported dynamically from boards-near-me — never rendered on the server.
 // Requires: npm install leaflet react-leaflet && npm install -D @types/leaflet
 
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { BoardRow } from './boards-near-me'
@@ -28,6 +28,7 @@ function MapController({
   const boardsRef = useRef(boards)
   useEffect(() => { boardsRef.current = boards }, [boards])
 
+  // ResizeObserver keeps the map sized correctly when the container changes.
   useEffect(() => {
     const container = map.getContainer()
     const observer = new ResizeObserver(() => map.invalidateSize())
@@ -89,22 +90,7 @@ export default function BoardsMap({
   onBoardClick: (id: string) => void
   showUserDot?: boolean
 }) {
-  // useLayoutEffect cleanup runs synchronously on unmount — important because
-  // useEffect cleanup can lose the race with the next commit when navigating.
-  // Clearing _leaflet_id prevents "Map container is being reused" on nav + back.
-  const mapWrapperRef = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => {
-    // Capture the DOM node now — React nulls refs before cleanup fires,
-    // so mapWrapperRef.current would be null if read inside the cleanup.
-    const wrapper = mapWrapperRef.current
-    return () => {
-      const el = wrapper?.querySelector('.leaflet-container') as any
-      if (el?._leaflet_id) delete el._leaflet_id
-    }
-  }, [])
-
   return (
-    <div ref={mapWrapperRef} style={{ height: '100%', width: '100%' }}>
     <MapContainer
       center={[center.lat, center.lng]}
       zoom={14}
@@ -190,6 +176,5 @@ export default function BoardsMap({
         )
       })}
     </MapContainer>
-    </div>
   )
 }
