@@ -89,12 +89,12 @@ export default function UploadPage() {
 
   const { progress, complete, reset } = useProgress(uploading)
 
-  useState(() => {
+  useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) setUser(data.user)
       setLoading(false)
     })
-  })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // When a board_id comes back, fetch its existing values to pre-populate.
   useEffect(() => {
