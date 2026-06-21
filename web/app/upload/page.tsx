@@ -219,41 +219,50 @@ export default function UploadPage() {
   )
 
   if (!user) return (
-    <div className="min-h-screen bg-surface-page flex items-center justify-center px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div>
-          <h1 className="font-marker text-3xl text-content-primary">Posters Up</h1>
-          <p className="text-sm mt-1 text-content-muted">Sign in to submit photos</p>
-        </div>
-
-        {sent ? (
-          <p className="text-sm text-content-secondary">
-            Check your email for a sign-in link.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            <input
-              type="email"
-              placeholder="your@email.com"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && signIn()}
-              className="w-full bg-surface-card border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle"
-            />
-            <button
-              onClick={signIn}
-              className="w-full bg-content-secondary text-surface-page rounded px-3 py-2 text-sm font-medium"
-            >
-              Send sign-in link
-            </button>
+    <div className="min-h-screen bg-surface-page">
+      <header className="border-b border-edge">
+        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+            <div>
+              <Link href="/" className="text-xs text-content-muted hover:text-content-secondary transition-colors">
+                ← Events
+              </Link>
+            </div>
+            <h1 className="font-marker text-3xl text-content-primary text-center px-2">
+              <Link href="/">Posters Up</Link>
+            </h1>
+            <div />
           </div>
-        )}
+          <p className="text-sm mt-1 text-content-muted text-center">Sign in to submit photos</p>
+        </div>
+      </header>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
-
-        <Link href="/" className="block text-xs text-content-muted hover:text-content-secondary">
-          ← Back to events
-        </Link>
+      <div className="flex justify-center px-4 pt-16">
+        <div className="w-full max-w-sm space-y-4">
+          {sent ? (
+            <p className="text-sm text-content-secondary">
+              Check your email for a sign-in link.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <input
+                type="email"
+                placeholder="your@email.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && signIn()}
+                className="w-full bg-surface-card border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle"
+              />
+              <button
+                onClick={signIn}
+                className="w-full bg-content-secondary text-surface-page rounded px-3 py-2 text-sm font-medium"
+              >
+                Send sign-in link
+              </button>
+            </div>
+          )}
+          {error && <p className="text-sm text-red-400">{error}</p>}
+        </div>
       </div>
     </div>
   )
@@ -263,7 +272,7 @@ export default function UploadPage() {
 
       {/* Header — same grid layout as PageHeader: ← Events | Posters Up | email */}
       <header className="border-b border-edge">
-        <div className="max-w-2xl mx-auto px-3 pt-3 pb-2">
+        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
             <div>
               <Link href="/" className="text-xs text-content-muted hover:text-content-secondary transition-colors whitespace-nowrap">
