@@ -105,7 +105,7 @@ export function PageHeader({
   const defaultLeftSlot = (
     <Link
       href="/upload"
-      className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge whitespace-nowrap"
+      className="text-xs px-2 py-1 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge whitespace-nowrap"
     >
       Submit photo
     </Link>
@@ -123,7 +123,7 @@ export function PageHeader({
   return (
     <div>
       <header>
-        <div className="max-w-2xl mx-auto px-3 pt-3 pb-2">
+        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
 
           {/* Nav bar: left action | brand (centered) | right action */}
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
