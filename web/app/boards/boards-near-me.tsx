@@ -261,21 +261,21 @@ export default function BoardsNearMe({
         isDetected={locationState === 'granted'}
         subtitle="Bulletin boards around"
         onCityPick={handleCityPick}
+        leftSlot={
+          <Link
+            href="/"
+            className="text-xs text-content-muted hover:text-content-secondary transition-colors"
+          >
+            ← Events
+          </Link>
+        }
         rightSlot={
-          <div className="flex items-center gap-3">
-            <Link
-              href="/"
-              className="text-xs text-content-muted hover:text-content-secondary transition-colors"
-            >
-              ← Events
-            </Link>
-            <Link
-              href="/upload"
-              className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
-            >
-              Submit photo
-            </Link>
-          </div>
+          <Link
+            href="/upload"
+            className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
+          >
+            Submit photo
+          </Link>
         }
       />
 

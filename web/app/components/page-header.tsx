@@ -16,7 +16,10 @@ interface PageHeaderProps {
   // Lets client pages (boards) re-fetch without a full navigation.
   // label is a city name (string) or null when the pick came from geolocation.
   onCityPick?: (lat: number, lng: number, label: string | null) => void
-  // Replaces the default "+ Submit photo" link when provided.
+  // Left and right nav slots flanking the brand.
+  // Defaults: leftSlot = "Submit photo" link, rightSlot = "Boards →" link.
+  // Boards page passes leftSlot="← Events", rightSlot="Submit photo".
+  leftSlot?:   React.ReactNode
   rightSlot?:  React.ReactNode
 }
 
@@ -28,6 +31,7 @@ export function PageHeader({
   isDetected,
   subtitle = 'Events from the bulletin boards around',
   onCityPick,
+  leftSlot,
   rightSlot,
 }: PageHeaderProps) {
   const [open, setOpen]               = useState(false)
@@ -98,46 +102,58 @@ export function PageHeader({
   // null cityLabel after geo → "your location"; null without geo → "your area"
   const label = cityLabel ?? (isDetected ? 'your location' : 'your area')
 
+  const defaultLeftSlot = (
+    <Link
+      href="/upload"
+      className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
+    >
+      Submit photo
+    </Link>
+  )
+
+  const defaultRightSlot = (
+    <Link
+      href="/boards"
+      className="text-xs text-content-muted hover:text-content-secondary transition-colors"
+    >
+      Boards →
+    </Link>
+  )
+
   return (
     <div>
       <header>
         <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
-          <div className="flex items-baseline justify-between">
+
+          {/* Nav bar: left action | brand (centered) | right action */}
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center">
             <div>
-              <h1 className="font-marker text-3xl text-content-primary">
-                <Link href="/">Posters Up</Link>
-              </h1>
-              <div className="text-sm mt-0.5 text-content-muted">
-                {subtitle}{' '}
-                <button
-                  onClick={() => (open ? closeAndReset() : openTray())}
-                  className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors"
-                  aria-expanded={open}
-                  aria-haspopup="dialog"
-                >
-                  <span className="underline underline-offset-2 decoration-dotted">{label}</span>
-                  <span className={`text-content-muted inline-block transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▾</span>
-                </button>
-              </div>
+              {leftSlot !== undefined ? leftSlot : defaultLeftSlot}
             </div>
 
-            {rightSlot !== undefined ? rightSlot : (
-              <div className="flex items-center gap-3">
-                <Link
-                  href="/upload"
-                  className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
-                >
-                  Submit photo
-                </Link>
-                <Link
-                  href="/boards"
-                  className="text-xs text-content-muted hover:text-content-secondary transition-colors"
-                >
-                  Boards →
-                </Link>
-              </div>
-            )}
+            <h1 className="font-marker text-3xl text-content-primary text-center px-2">
+              <Link href="/">Posters Up</Link>
+            </h1>
+
+            <div className="flex justify-end">
+              {rightSlot !== undefined ? rightSlot : defaultRightSlot}
+            </div>
           </div>
+
+          {/* Subtitle + city picker — own line, centered to share axis with brand */}
+          <div className="text-sm mt-1 text-content-muted text-center">
+            {subtitle}{' '}
+            <button
+              onClick={() => (open ? closeAndReset() : openTray())}
+              className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors py-1 -my-1"
+              aria-expanded={open}
+              aria-haspopup="dialog"
+            >
+              <span className="underline underline-offset-2 decoration-dotted">{label}</span>
+              <span className={`text-content-muted inline-block transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▾</span>
+            </button>
+          </div>
+
         </div>
       </header>
 
@@ -151,7 +167,7 @@ export function PageHeader({
       >
         <div style={{ overflow: 'hidden' }}>
           <div className="border-y border-edge mb-3">
-            <div className="max-w-2xl mx-auto px-4 py-5 flex items-baseline gap-6">
+            <div className="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-3 sm:flex-row sm:items-baseline sm:gap-6 sm:py-5">
 
               {/* Label */}
               <span className="text-sm text-content shrink-0">
@@ -171,8 +187,8 @@ export function PageHeader({
                 ))}
               </div>
 
-              {/* Divider */}
-              <span className="text-edge-subtle select-none shrink-0">·</span>
+              {/* Divider — visual only; hidden on mobile where stacking provides separation */}
+              <span className="hidden sm:inline text-edge-subtle select-none shrink-0">·</span>
 
               {/* Browser geolocation */}
               <button

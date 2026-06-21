@@ -261,21 +261,23 @@ export default function UploadPage() {
   return (
     <div className="min-h-screen bg-surface-page">
 
-      {/* Header */}
+      {/* Header — same grid layout as PageHeader: ← Events | Posters Up | email */}
       <header className="border-b border-edge">
-        <div className="max-w-2xl mx-auto px-4 py-6 flex items-baseline justify-between">
-          <div>
-            <h1 className="font-marker text-3xl text-content-primary">
+        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center">
+            <div>
+              <Link href="/" className="text-xs text-content-muted hover:text-content-secondary transition-colors">
+                ← Events
+              </Link>
+            </div>
+            <h1 className="font-marker text-3xl text-content-primary text-center px-2">
               <Link href="/">Posters Up</Link>
             </h1>
-            <p className="text-sm mt-0.5 text-content-muted">Submit a bulletin board photo</p>
+            <div className="flex justify-end">
+              <span className="text-xs text-content-muted">{user.email}</span>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-xs text-content-muted">{user.email}</span>
-            <Link href="/" className="text-xs text-content-muted hover:text-content-secondary">
-              ← Events
-            </Link>
-          </div>
+          <p className="text-sm mt-1 text-content-muted text-center">Submit a bulletin board photo</p>
         </div>
       </header>
 
