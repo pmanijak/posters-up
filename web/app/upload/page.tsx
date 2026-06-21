@@ -263,7 +263,7 @@ export default function UploadPage() {
 
       {/* Header — same grid layout as PageHeader: ← Events | Posters Up | email */}
       <header className="border-b border-edge">
-        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
+        <div className="max-w-2xl mx-auto px-3 pt-3 pb-2">
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
             <div>
               <Link href="/" className="text-xs text-content-muted hover:text-content-secondary transition-colors whitespace-nowrap">

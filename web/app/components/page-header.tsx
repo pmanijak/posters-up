@@ -123,7 +123,7 @@ export function PageHeader({
   return (
     <div>
       <header>
-        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
+        <div className="max-w-2xl mx-auto px-3 pt-3 pb-2">
 
           {/* Nav bar: left action | brand (centered) | right action */}
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
