@@ -331,7 +331,7 @@ export default function BoardsNearMe({
 
         {/* Map panel */}
         <div className={`flex-1 min-w-0 ${showMap ? 'block' : 'hidden md:block'}`}>
-          {!loading && mapReady && (
+          {mapReady && (
             <BoardsMap
               boards={boards}
               center={mapCenter}
