@@ -151,7 +151,7 @@ export default function BoardsMap({
               */}
               <div style={{ minWidth: 160, fontFamily: 'sans-serif' }}>
                 <div style={{ fontWeight: 600, marginBottom: 2, color: '#1a1a1a' }}>
-                  {board.location_name ?? 'Unnamed board'}
+                  {board.location_name ?? board.managed_by ?? 'Unnamed board'}
                 </div>
                 {board.description && (
                   <div style={{ fontSize: 12, color: '#555', marginBottom: 4, lineHeight: 1.4 }}>
