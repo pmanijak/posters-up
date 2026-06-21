@@ -14,11 +14,12 @@ export const metadata = { title: 'Boards — Posters Up' }
 export default async function BoardsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ lat?: string; lng?: string }>
+  searchParams: Promise<{ lat?: string; lng?: string; board?: string }>
 }) {
   // Read lat/lng from URL params (set by router.replace in boards-near-me
   // when the user picks a city, so the location survives a page refresh).
-  const { lat: latParam, lng: lngParam } = await searchParams
+  // board param comes from event card "Map →" links — activates that board on load.
+  const { lat: latParam, lng: lngParam, board: boardId } = await searchParams
   const { lat, lng } = await resolveLocation(latParam, lngParam)
 
   const [{ data: nearbyBoards }, { data: rawCities }] = await Promise.all([
@@ -34,6 +35,7 @@ export default async function BoardsPage({
       fallbackLat={lat}
       fallbackLng={lng}
       initialCityLabel={cityLabel}
+      initialBoardId={boardId ?? null}
       cities={cities}
     />
   )

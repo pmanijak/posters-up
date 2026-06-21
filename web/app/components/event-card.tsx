@@ -386,14 +386,12 @@ export function EventCard({ event }: { event: Event }) {
                               </span>
                             </div>
                             {b.lat && b.lng && (
-                              <a
-                                href={`https://www.openstreetmap.org/?mlat=${b.lat}&mlon=${b.lng}#map=18/${b.lat}/${b.lng}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
+                              <Link
+                                href={`/boards?board=${b.board_id}&lat=${b.lat}&lng=${b.lng}`}
                                 className="text-xs text-content-muted hover:text-content-secondary transition-colors shrink-0 self-start"
                               >
                                 Map →
-                              </a>
+                              </Link>
                             )}
                           </li>
                         )

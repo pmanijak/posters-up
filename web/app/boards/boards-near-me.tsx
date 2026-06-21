@@ -49,11 +49,13 @@ function BoardCard({
   active,
   showDistance,
   onClick,
+  onMapClick,
 }: {
   board: BoardRow
   active: boolean
   showDistance: boolean
   onClick: () => void
+  onMapClick: () => void
 }) {
   const { fresh } = staleness(board.last_sighted_at)
 
@@ -136,15 +138,12 @@ function BoardCard({
             )}
           </div>
           {board.board_lat && board.board_lng && (
-            <a
-              href={`https://www.openstreetmap.org/?mlat=${board.board_lat}&mlon=${board.board_lng}#map=18/${board.board_lat}/${board.board_lng}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
+            <button
+              onClick={(e) => { e.stopPropagation(); onMapClick() }}
               className="text-xs text-content-muted hover:text-content-secondary transition-colors"
             >
               Map →
-            </a>
+            </button>
           )}
         </div>
 
@@ -159,11 +158,13 @@ export default function BoardsNearMe({
   fallbackLat,
   fallbackLng,
   initialCityLabel,
+  initialBoardId,
   cities,
 }: {
   fallbackLat:      number
   fallbackLng:      number
   initialCityLabel: string | null
+  initialBoardId?:  string | null
   cities:           CityOption[]
 }) {
   const router = useRouter()
@@ -173,9 +174,11 @@ export default function BoardsNearMe({
   const [locationState, setLocationState] = useState<LocationState>('requesting')
   const [cityLabel, setCityLabel]         = useState<string | null>(initialCityLabel)
   const [mapCenter, setMapCenter]         = useState({ lat: fallbackLat, lng: fallbackLng })
-  const [activeBoard, setActiveBoard]     = useState<string | null>(null)
-  const [panToBoard, setPanToBoard]       = useState<string | null>(null)
-  const [showMap, setShowMap]             = useState(false)
+  // If arriving from an event card "Map →" link, pre-activate that board
+  // and show the map immediately (especially useful on mobile).
+  const [activeBoard, setActiveBoard]     = useState<string | null>(initialBoardId)
+  const [panToBoard, setPanToBoard]       = useState<string | null>(initialBoardId)
+  const [showMap, setShowMap]             = useState(initialBoardId !== null)
   const [mapReady, setMapReady]           = useState(false)
   // Unique per mount — forces a fresh DOM subtree for the map panel on each
   // page visit, preventing Leaflet's "container being reused" error.
@@ -322,6 +325,11 @@ export default function BoardsNearMe({
                     active={activeBoard === board.id}
                     showDistance={locationState === 'granted'}
                     onClick={() => handleCardClick(board.id)}
+                    onMapClick={() => {
+                      setActiveBoard(board.id)
+                      setPanToBoard(board.id)
+                      setShowMap(true)
+                    }}
                   />
                 </div>
               ))}
