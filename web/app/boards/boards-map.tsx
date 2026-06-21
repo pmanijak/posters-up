@@ -94,8 +94,11 @@ export default function BoardsMap({
   // Clearing _leaflet_id prevents "Map container is being reused" on nav + back.
   const mapWrapperRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
+    // Capture the DOM node now — React nulls refs before cleanup fires,
+    // so mapWrapperRef.current would be null if read inside the cleanup.
+    const wrapper = mapWrapperRef.current
     return () => {
-      const el = mapWrapperRef.current?.querySelector('.leaflet-container') as any
+      const el = wrapper?.querySelector('.leaflet-container') as any
       if (el?._leaflet_id) delete el._leaflet_id
     }
   }, [])
