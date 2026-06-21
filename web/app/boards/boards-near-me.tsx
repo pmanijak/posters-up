@@ -164,7 +164,7 @@ export default function BoardsNearMe({
   fallbackLat:      number
   fallbackLng:      number
   initialCityLabel: string | null
-  initialBoardId?:  string | null
+  initialBoardId:  string | null
   cities:           CityOption[]
 }) {
   const router = useRouter()
