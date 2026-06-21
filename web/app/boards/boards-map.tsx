@@ -170,8 +170,7 @@ export default function BoardsMap({
       )}
 
       {/* Board markers — thumbtack pins, active pin renders last (on top) */}
-      {[...boards]
-        .sort((a, b) => (b.id === activeBoard ? -1 : a.id === activeBoard ? 1 : 0))
+      {boards
         .map((board) => {
           const isActive = board.id === activeBoard
           return (
