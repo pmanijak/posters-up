@@ -9,6 +9,7 @@ import { categoryColor, hexToRgba } from '@/lib/categories'
 import { seenAgo, staleness } from '@/lib/dates'
 import { formatDistance } from '@/lib/format'
 import { PageHeader } from '../components/page-header'
+import { CityPicker } from '../components/city-picker'
 import type { CityOption } from '../components/city-picker'
 
 const BoardsMap = dynamic(() => import('./boards-map'), { ssr: false })
@@ -305,16 +306,10 @@ export default function BoardsNearMe({
           {loading ? (
             <p className="text-sm text-content-muted text-center py-20">Loading…</p>
           ) : boards.length === 0 ? (
-            <div className="text-center py-16">
-              <p className="text-lg mb-2 font-marker text-content-primary">No boards nearby yet</p>
-              <p className="text-sm text-content-muted">Submit a photo to get your area started.</p>
-              <Link
-                href="/upload"
-                className="text-sm mt-3 inline-block text-content-secondary underline underline-offset-2"
-              >
-                Submit a photo
-              </Link>
-            </div>
+            <CityPicker
+              cities={cities}
+              onPick={(city) => handleCityPick(city.lat, city.lng, city.label)}
+            />
           ) : (
             <div className="p-3 space-y-3">
               {boards.map((board) => (

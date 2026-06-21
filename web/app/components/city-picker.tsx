@@ -3,17 +3,27 @@
 import { useRouter } from 'next/navigation'
 
 export interface CityOption {
-  geo_city: string
+  geo_city:   string
   geo_region: string | null
-  lat: number
-  lng: number
-  label: string  // pre-computed by server: "Olympia" or "Olympia, Washington"
+  lat:        number
+  lng:        number
+  label:      string  // pre-computed by server: "Olympia" or "Olympia, Washington"
 }
 
-export function CityPicker({ cities }: { cities: CityOption[] }) {
+export function CityPicker({
+  cities,
+  onPick,
+}: {
+  cities: CityOption[]
+  onPick?: (city: CityOption) => void
+}) {
   const router = useRouter()
 
   function pick(city: CityOption) {
+    if (onPick) {
+      onPick(city)
+      return
+    }
     // Save explicit choice as a cookie — server can read this on next load,
     // so the right city renders immediately with no flash.
     // 30-day expiry: long enough to be useful, short enough to not be stale.
@@ -24,7 +34,6 @@ export function CityPicker({ cities }: { cities: CityOption[] }) {
       'SameSite=Lax',
       'Secure',
     ].join('; ')
-
     const params = new URLSearchParams()
     params.set('lat', city.lat.toFixed(4))
     params.set('lng', city.lng.toFixed(4))
@@ -50,7 +59,6 @@ export function CityPicker({ cities }: { cities: CityOption[] }) {
           </button>
         ))}
       </div>
-
       <div className="mt-10 pt-8 border-t border-edge-subtle">
         <p className="text-sm text-content-muted mb-3">
           Your city isn't here yet?
