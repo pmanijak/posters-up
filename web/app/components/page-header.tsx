@@ -101,7 +101,7 @@ export function PageHeader({
   return (
     <div>
       <header>
-        <div className="max-w-2xl mx-auto px-4 pt-3">
+        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
           <div className="flex items-baseline justify-between">
             <div>
               <h1 className="font-marker text-3xl text-content-primary">
@@ -150,7 +150,7 @@ export function PageHeader({
         }}
       >
         <div style={{ overflow: 'hidden' }}>
-          <div className="border-y border-edge mt-3">
+          <div className="border-y border-edge mb-3">
             <div className="max-w-2xl mx-auto px-4 py-5 flex items-baseline gap-6">
 
               {/* Label */}

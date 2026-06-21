@@ -130,7 +130,7 @@ export default async function DiscoverPage({
         <FiltersProvider key={q ?? ''} initialQuery={q}>
 
           <div className="sticky top-0 z-10 bg-surface-page">
-            <div className="max-w-2xl mx-auto px-4 pt-6 pb-3">
+            <div className="max-w-2xl mx-auto px-4 pt-2 pb-3">
               <FilterBar activeCategory={category} />
             </div>
           </div>

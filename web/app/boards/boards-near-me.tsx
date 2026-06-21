@@ -317,7 +317,7 @@ export default function BoardsNearMe({
               onPick={(city) => handleCityPick(city.lat, city.lng, city.label)}
             />
           ) : (
-            <div className="p-3 space-y-3">
+            <div className="px-3 pb-3 pt-0 space-y-3">
               {boards.map((board) => (
                 <div key={board.id} data-board-id={board.id}>
                   <BoardCard
