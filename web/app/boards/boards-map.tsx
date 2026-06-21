@@ -198,7 +198,7 @@ export default function BoardsMap({
                   )}
                   <div style={{ fontSize: 12, color: '#444' }}>
                     {board.active_flyer_count}{' '}
-                    {board.active_flyer_count === 1 ? 'flyer' : 'flyers'} active
+                    {board.active_flyer_count === 1 ? 'poster' : 'posters'} active
                   </div>
                   <a
                     href={`https://www.openstreetmap.org/?mlat=${board.board_lat}&mlon=${board.board_lng}&zoom=18`}

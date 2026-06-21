@@ -128,7 +128,7 @@ function BoardCard({
 
             <span className="text-xs text-content-muted">
               {board.active_flyer_count}{' '}
-              {board.active_flyer_count === 1 ? 'flyer' : 'flyers'}
+              {board.active_flyer_count === 1 ? 'poster' : 'posters'}
             </span>
             <span className={`text-xs ${fresh ? 'text-content-accent' : 'text-content-muted'}`}>
               {seenAgo(board.last_sighted_at)}
