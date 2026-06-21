@@ -272,7 +272,7 @@ export default function BoardsNearMe({
         rightSlot={
           <Link
             href="/upload"
-            className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge"
+            className="text-xs px-3 py-1.5 rounded border border-edge-subtle text-content-secondary transition-colors hover:border-edge whitespace-nowrap"
           >
             Submit photo
           </Link>

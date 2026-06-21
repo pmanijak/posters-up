@@ -266,7 +266,7 @@ export default function UploadPage() {
         <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
             <div>
-              <Link href="/" className="text-xs text-content-muted hover:text-content-secondary transition-colors">
+              <Link href="/" className="text-xs text-content-muted hover:text-content-secondary transition-colors whitespace-nowrap">
                 ← Events
               </Link>
             </div>
@@ -274,7 +274,7 @@ export default function UploadPage() {
               <Link href="/">Posters Up</Link>
             </h1>
             <div className="flex justify-end">
-              <span className="text-xs text-content-muted">{user.email}</span>
+              <span className="text-xs text-content-muted truncate max-w-[100px] sm:max-w-none">{user.email}</span>
             </div>
           </div>
           <p className="text-sm mt-1 text-content-muted text-center">Submit a bulletin board photo</p>
