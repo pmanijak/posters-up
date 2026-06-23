@@ -5,22 +5,29 @@
 //
 // Queue state is tracked via events.enrichment_attempted_at:
 //   null     = not yet attempted, eligible for enrichment
-//   non-null = already attempted; reset to null by extract when a new
-//              sighting arrives so the event is re-queued with fresh data
+//   non-null = already attempted; reset to null by extract (via
+//              maybe_reenqueue_enrichment) only when a new sighting
+//              brings meaningful new search signal
+//
+// Model selection:
+//   enrichment_attempt_count = 0  → Sonnet  (first pass: narrative writing,
+//                                             full research, talent bios)
+//   enrichment_attempt_count > 0  → Haiku   (re-enrichment: checking whether
+//                                             new signal changes results)
 //
 // Design principle:
 //   events holds what the flyer says.
 //   Web search results are never written to events field columns.
 //   Enrichment data lives in event_sightings.enrichment_data (JSONB),
-//   where the presentation layer can display it as a distinct "more info"
-//   layer with source attribution — not as authoritative flyer content.
+//   where the presentation layer displays it as a distinct "found online"
+//   section alongside — not instead of — what the flyer said.
 //   Web sources feed confidence via event_verifications only.
 //
 // Rules:
 //   - Never enrich flyer_style = 'minimal' events (intentionally sparse)
 //   - Web-found data → event_sightings.enrichment_data only
 //   - Web sources → event_verifications (feeds confidence trigger)
-//   - events is never updated by this function (except enrichment_attempted_at)
+//   - events is never updated by this function (except via RPCs)
 //   - DB trigger handles confidence recomputation after each verification insert
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -53,26 +60,50 @@ interface EventRow {
   contact: string | null;
   event_url: string | null;
   confidence_score: number;
+  enrichment_attempt_count: number;
   organization_name: string | null;
+  talent_names: string[];
+}
+
+// Mirrors lib/types/enrichment.ts — kept local to avoid a shared import
+// across Edge Function / Next.js boundary. Keep in sync manually.
+
+interface EnrichmentTalentLink {
+  label: string;
+  url: string;
+}
+
+interface EnrichmentTalent {
+  name: string;
+  bio: string | null;
+  genre: string[] | null;
+  links: EnrichmentTalentLink[];
+}
+
+interface EnrichmentFound {
+  date_start: string | null;
+  date_end: string | null;
+  time_start: string | null;
+  time_end: string | null;
+  location_address: string | null;
+  event_url: string | null;
+  contact: string | null;
 }
 
 interface EnrichmentSource {
   url: string;
+  label: string;
   source_type: SourceType;
   verified_fields: string[];
 }
 
-interface EnrichmentResult {
-  found: {
-    date_start?: string | null;
-    date_end?: string | null;
-    time_start?: string | null;
-    time_end?: string | null;
-    location_address?: string | null;
-    event_url?: string | null;
-    contact?: string | null;
-    description?: string | null;
-  };
+interface EnrichmentData {
+  description: string | null;
+  talent: EnrichmentTalent[];
+  venue_context: string | null;
+  ticket_url: string | null;
+  sold_out: boolean | null;
+  found: EnrichmentFound;
   sources: EnrichmentSource[];
 }
 
@@ -96,12 +127,6 @@ interface UserLocation {
   country?: string;
 }
 
-// Bundles the board's raw coordinates with the derived UserLocation.
-// Both travel together through the pipeline:
-//   coords      — available for future haversine validation if we ever
-//                 geocode found addresses
-//   userLocation — passed to the web_search tool hint and prepended to
-//                  the enrichment prompt as a city constraint
 interface LocationContext {
   coords: Coords;
   userLocation: UserLocation | null;
@@ -173,11 +198,6 @@ function parseGeoPoint(raw: unknown): Coords | null {
 
 // ---------------------------------------------------------------------------
 // Reverse geocoding via Nominatim (OpenStreetMap)
-//
-// Called only on a cache miss — when boards.geo_city is null.
-// Nominatim's usage policy: descriptive User-Agent, max 1 req/sec.
-// With MAX_EVENTS_PER_RUN = 1, we naturally stay within the rate limit.
-// Returns null on failure; callers omit user_location rather than erroring.
 // ---------------------------------------------------------------------------
 
 async function reverseGeocode(coords: Coords): Promise<UserLocation | null> {
@@ -200,7 +220,6 @@ async function reverseGeocode(coords: Coords): Promise<UserLocation | null> {
     const region: string | undefined = addr.state;
     const country: string | undefined = addr.country_code?.toUpperCase();
 
-    // A bare country code isn't useful enough to narrow search results.
     if (!city && !region) return null;
 
     return { type: "approximate", city, region, country };
@@ -211,14 +230,6 @@ async function reverseGeocode(coords: Coords): Promise<UserLocation | null> {
 
 // ---------------------------------------------------------------------------
 // Board location — DB lookup with geo cache
-//
-// Queries the most recent active sighting for this event to find its board,
-// then returns both the board's coordinates and its cached UserLocation
-// (boards.geo_city / geo_region / geo_country).
-//
-// Cache miss (geo columns null) → caller calls reverseGeocode + saveBoardGeo.
-// Once written, every subsequent enrichment for any event on this board
-// reads from cache without hitting Nominatim.
 // ---------------------------------------------------------------------------
 
 async function getBoardLocation(
@@ -268,12 +279,10 @@ async function saveBoardGeo(
     .eq("id", boardId);
 
   if (error) {
-    // Non-fatal — next enrichment will try Nominatim again.
     console.error(`saveBoardGeo failed for board ${boardId}:`, error);
   }
 }
 
-// Returns coords + userLocation together so the full context travels as one unit.
 async function resolveLocationContext(
   supabase: SupabaseClient,
   eventId: string
@@ -281,104 +290,117 @@ async function resolveLocationContext(
   const boardLoc = await getBoardLocation(supabase, eventId);
   if (!boardLoc) return null;
 
-  // Cache hit — no Nominatim call needed.
   if (boardLoc.userLocation) {
     return { coords: boardLoc.coords, userLocation: boardLoc.userLocation };
   }
 
-  // Cache miss — reverse geocode and save for next time.
   const geo = await reverseGeocode(boardLoc.coords);
   if (geo) await saveBoardGeo(supabase, boardLoc.board_id, geo);
   return { coords: boardLoc.coords, userLocation: geo };
 }
 
 // ---------------------------------------------------------------------------
-// Claude enrichment call
+// Enrichment system prompt
 // ---------------------------------------------------------------------------
 
-const ENRICHMENT_SYSTEM_PROMPT = `You are a web research assistant for a community event discovery app.
+const ENRICHMENT_SYSTEM_PROMPT = `You are a web researcher for a community event discovery app. Your output is the "found online" section shown when a user taps "Tell me more" on an event card. Make it worth reading.
 
-You receive partial event data extracted from a physical bulletin board flyer.
-Search the web to find supporting information — full dates, venue address, event URL,
-organizer website, description. This data will be shown to users as supplementary
-"found online" context alongside what was on the flyer, not as a replacement for it.
+You receive partial data extracted from a physical bulletin board flyer. Search the web for context that would make someone decide to attend: who the artist is, what they sound like, what the venue is like, whether tickets are available.
 
-CRITICAL RULES:
-- Only report information confirmed by a web source. Never guess or invent.
-- null is always better than wrong.
-- LOCATION CONSTRAINT: the board location is included in the input. Only return results
-  for events in that city/region. A touring artist may have many shows listed online —
-  find the one in the board's city, not a show in another state.
-- contact field: public-facing URLs ONLY — venue website, org booking page, org website.
-  NEVER personal mobile numbers. NEVER personal email addresses. If you find only personal
-  contacts, leave contact null.
+LOCATION CONSTRAINT (hard):
+The board's city is in the input. Only return results for events in that city.
+A touring artist may have many upcoming shows — find the one in the board's city.
+If you cannot confirm a show in that city, set date_start and location_address to null. Never report a date or address from another city.
 
-TOUR AND SHOWS LISTINGS:
-If you find a general upcoming shows or tour page (e.g. artist-website.com/shows or
-/tour) rather than a page specific to one event, do NOT stop there. That page confirms
-the artist is active but does not confirm the specific local show. You must go further:
-- Scan the listing for a show in the board's city/region
-- If you find one, report that specific date and venue in found.date_start /
-  found.location_address, and set event_url to the deepest link available (the
-  specific event page or ticketing link for that show, not the tour index)
-- If you cannot identify a show in the board's city on that listing, leave
-  date_start and location_address null — do not report dates for other cities
-- A follow-up search for "[artist name] [city]" or "[artist name] [venue name]"
-  is a good use of a remaining search if the tour page was ambiguous
+TOUR PAGES:
+If you land on a general tour or shows listing (artist.com/tour), do not stop there. Scan for a show in the board's city. If found, link to the deepest available URL — the specific event page or ticketing link, not the tour index. If not found, do a follow-up search for "[artist name] [city]" or "[artist name] [venue name]" before giving up.
 
-VERIFIED FIELDS:
-verified_fields must only list fields you confirmed for THIS specific event in THIS city.
-- A tour listing page confirms "name" only — not date_start or location_address —
-  unless you found the specific local show on it.
-- A venue calendar page confirms name, date_start, location_address, location_name.
-- A ticketing page for the specific show confirms name, date_start, time_start,
-  location_address, price_raw (if present), age_restriction (if present).
-Do not include a field in verified_fields unless you are certain it matches this
-specific local event, not some other show by the same artist.
+CONTACT POLICY (hard):
+Never include personal phone numbers or personal email addresses anywhere in your output. found.contact must be a public-facing URL only: venue website, org booking page. If only personal contacts are found, set contact to null.
 
-SOURCE TYPES (classify each source you find):
-  "venue_website"  — the venue's own site or calendar (highest trust)
-  "org_website"    — the organizer's own website
+DESCRIPTION:
+Write 2-4 sentences a curious person would actually want to read. Draw on press coverage, organizer copy, artist bio, venue character — anything that makes this event feel real and specific. Not "Band X will perform at Venue Y." Something like what you'd read in a good alt-weekly preview. If you genuinely find nothing useful, set description to null. Do not write filler.
+
+TALENT:
+For each performer named in the input, search for:
+  bio    — 1-2 sentences: who they are, what they sound like, anything distinctive
+  genre  — array of genre tags (e.g. ["soul", "jazz", "folk"])
+  links  — Bandcamp, Spotify, personal site (label: "Listen", "Website", "Instagram", etc.)
+If a performer has no web presence, include them with null bio and empty links array.
+Only include performers who appear in the input talent list — do not add others.
+
+VENUE CONTEXT:
+Only populate if the web tells you something genuinely additive about the space itself: all-ages vs 21+, seated vs standing, known for good sound, coffee shop vs proper venue, capacity, parking, etc. Do not restate anything already in the description — if you covered the venue in the description paragraph, leave venue_context null. Do not restate the address or name. If you find nothing that the description didn't already cover, set venue_context to null.
+
+TICKET INFO:
+Set ticket_url to the deepest direct link found (Eventbrite event page, venue box office, etc.)
+Set sold_out to true only if a ticketing page explicitly confirms it. Otherwise null.
+Do not guess or infer sold-out status.
+
+SOURCE TYPES (classify each source you cite):
+  "venue_website"  — venue's own site or calendar
+  "org_website"    — organizer's own website
   "local_calendar" — alt-weekly, civic calendar, library listings, local news events section
   "ticketing"      — Eventbrite, Tixr, Brown Paper Tickets, TicketWeb, AXS
-  "news"           — local press article about the event
-  "social"         — Facebook event page, Instagram post
+  "news"           — local press article or preview
+  "social"         — Facebook event, Instagram post
 
-OUTPUT — your entire response must be a single JSON object and nothing else.
-No prose before it. No explanation after it. No markdown fences. No "Researcher's Note".
-If you found nothing, output exactly: {"found": {}, "sources": []}
+SOURCE LABELS:
+label should be a short human-readable name for display: "Obsidian calendar", "Bandcamp", "Olympia Weekly", "Eventbrite". Not the raw URL.
+
+VERIFIED FIELDS:
+verified_fields must only list fields you confirmed for this specific event in this city.
+A tour listing page confirms "name" only — not date_start or location_address — unless you found the specific local show on it. A venue calendar confirms name, date_start, location_address. A ticketing page for the specific show confirms name, date_start, time_start, location_address.
+
+OUTPUT:
+Your entire response must be a single JSON object and nothing else. No prose before it. No explanation after it. No markdown fences.
+If you found nothing useful after searching: {"description":null,"talent":[],"venue_context":null,"ticket_url":null,"sold_out":null,"found":{},"sources":[]}
+
 {
+  "description": "2-4 sentences worth reading, or null",
+  "talent": [
+    {
+      "name": "exact name from input",
+      "bio": "1-2 sentences or null",
+      "genre": ["tag1", "tag2"] or null,
+      "links": [{"label": "Listen", "url": "https://..."}]
+    }
+  ],
+  "venue_context": "what the web adds about this space, or null",
+  "ticket_url": "direct ticket purchase link or null",
+  "sold_out": true or null,
   "found": {
     "date_start": "YYYY-MM-DD or null",
     "date_end": "YYYY-MM-DD or null",
-    "time_start": "HH:MM (24h) or null",
-    "time_end": "HH:MM (24h) or null",
+    "time_start": "HH:MM 24h or null",
+    "time_end": "HH:MM 24h or null",
     "location_address": "full street address or null",
     "event_url": "direct link to this specific event or null",
-    "contact": "public venue/org URL only — no personal contacts — or null",
-    "description": "1-2 sentence description or null"
+    "contact": "public venue/org URL only — no personal contacts — or null"
   },
   "sources": [
     {
       "url": "https://...",
-      "source_type": "venue_website | org_website | local_calendar | ticketing | news | social",
+      "label": "Obsidian calendar",
+      "source_type": "venue_website",
       "verified_fields": ["name", "date_start", "location_address"]
     }
   ]
-}
+}`;
 
-If you find nothing useful after searching, return: {"found": {}, "sources": []}`;
+// ---------------------------------------------------------------------------
+// Claude enrichment call
+// ---------------------------------------------------------------------------
 
 async function callEnrichmentApi(
   event: EventRow,
   locationCtx: LocationContext | null
-): Promise<EnrichmentResult | null> {
+): Promise<EnrichmentData | null> {
   const userLocation = locationCtx?.userLocation ?? null;
   const knownLines: string[] = [];
 
-  // Board location comes first — it is the authoritative constraint.
-  // Claude should find the show in this city, not a different show by
-  // the same artist or under the same name elsewhere.
+  // Board location is the authoritative constraint — prepend it so the model
+  // sees it before any event details.
   if (userLocation?.city) {
     const loc = [userLocation.city, userLocation.region, userLocation.country]
       .filter(Boolean)
@@ -388,6 +410,7 @@ async function callEnrichmentApi(
 
   knownLines.push(`Name: ${event.name}`);
   if (event.organization_name) knownLines.push(`Organizer: ${event.organization_name}`);
+  if (event.talent_names.length) knownLines.push(`Talent: ${event.talent_names.join(", ")}`);
   if (event.date_start) knownLines.push(`Date: ${event.date_start}`);
   else if (event.date_raw) knownLines.push(`Date (as written on flyer): ${event.date_raw}`);
   else knownLines.push("Date: unknown");
@@ -395,22 +418,27 @@ async function callEnrichmentApi(
   if (event.location_name) knownLines.push(`Venue name: ${event.location_name}`);
   if (event.location_address) knownLines.push(`Address: ${event.location_address}`);
   if (event.event_url) knownLines.push(`Event URL: ${event.event_url}`);
-  if (event.description) knownLines.push(`Description: ${event.description}`);
+  if (event.description) knownLines.push(`Description from flyer: ${event.description}`);
 
   const missingFields = [
     !event.date_start && "date",
     !event.time_start && "time",
     !event.location_address && "address",
     !event.event_url && "event URL",
-    !event.contact && "organizer/venue website",
-    !event.description && "description",
   ].filter(Boolean);
 
   const userMessage =
     knownLines.join("\n") +
     (missingFields.length > 0
-      ? `\n\nLooking for: ${missingFields.join(", ")}`
-      : "\n\nAll key fields are present; find sources that confirm this event.");
+      ? `\n\nAlso looking for: ${missingFields.join(", ")}`
+      : "");
+
+  // Model selection: first enrichment pass gets Sonnet for narrative quality.
+  // Re-enrichment passes get Haiku — they're checking whether new signal
+  // changes results, not writing fresh prose.
+  const model = event.enrichment_attempt_count === 0
+    ? "claude-sonnet-4-6"
+    : "claude-haiku-4-5";
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -420,7 +448,7 @@ async function callEnrichmentApi(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-haiku-4-5",
+      model,
       max_tokens: 2000,
       system: [
         {
@@ -447,10 +475,6 @@ async function callEnrichmentApi(
 
   const data = await response.json();
 
-  // Web search responses contain a mix of block types:
-  //   "text"                   — Claude's final answer (what we want)
-  //   "server_tool_use"        — the search query Claude issued
-  //   "web_search_tool_result" — raw results from the search API
   const textBlocks = (data.content as Array<{ type: string; text?: string }>)
     .filter((b) => b.type === "text" && b.text);
 
@@ -472,28 +496,40 @@ async function callEnrichmentApi(
     return text.trim();
   }
 
+  let parsed: any;
   try {
-    return JSON.parse(extractJson(raw)) as EnrichmentResult;
+    parsed = JSON.parse(extractJson(raw));
   } catch (e) {
     console.error(`JSON parse failed for event ${event.id}:`, e, "\nRaw:", raw.slice(0, 300));
     return null;
   }
+
+  // Normalize to a safe EnrichmentData shape with defaults for required fields.
+  return {
+    description:   parsed.description   ?? null,
+    talent:        Array.isArray(parsed.talent) ? parsed.talent : [],
+    venue_context: parsed.venue_context ?? null,
+    ticket_url:    parsed.ticket_url    ?? null,
+    sold_out:      parsed.sold_out      ?? null,
+    found:         parsed.found         ?? {},
+    sources:       Array.isArray(parsed.sources) ? parsed.sources : [],
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Mark attempted
 //
+// Calls mark_enrichment_attempted() which stamps enrichment_attempted_at
+// and increments enrichment_attempt_count atomically.
 // Called after every enrichment attempt, successful or not.
-// Removes the event from the queue until a new sighting resets the flag.
 // ---------------------------------------------------------------------------
 
 async function markAttempted(supabase: SupabaseClient, eventId: string): Promise<void> {
-  const { error } = await supabase
-    .from("events")
-    .update({ enrichment_attempted_at: new Date().toISOString() })
-    .eq("id", eventId);
+  const { error } = await supabase.rpc("mark_enrichment_attempted", {
+    p_event_id: eventId,
+  });
 
-  if (error) console.error(`markAttempted failed for event ${eventId}:`, error);
+  if (error) console.error(`mark_enrichment_attempted failed for event ${eventId}:`, error);
 }
 
 // ---------------------------------------------------------------------------
@@ -508,24 +544,35 @@ async function processEvent(
   const result = await callEnrichmentApi(event, locationCtx);
 
   // Mark attempted regardless of outcome — prevents retry storms on events
-  // with no web footprint. extract resets this when a new sighting arrives.
+  // with no web footprint. extract resets enrichment_attempted_at via
+  // maybe_reenqueue_enrichment() only when meaningful new signal arrives.
   await markAttempted(supabase, event.id);
 
+  // Determine whether we found anything worth storing.
+  // Store if any meaningful content was returned — even a good description
+  // with no sources is worth showing to users.
+  const hasContent = result && (
+    result.description !== null ||
+    result.talent.length > 0 ||
+    result.venue_context !== null ||
+    result.ticket_url !== null ||
+    result.sources.length > 0
+  );
+
   // Write enrichment result to event_sightings.enrichment_data.
-  // This is the only place web-found field values are stored.
-  // The presentation layer reads from here to show a distinct "found online"
-  // section — separate from what the flyer said, with source attribution.
+  // This is the only place web-found content is stored.
+  // The presentation layer reads from here to show the "found online" section.
   await supabase
     .from("event_sightings")
     .update({
       enrichment_source: "web_search",
-      enrichment_data: result?.sources?.length ? result : null,
+      enrichment_data: hasContent ? result : null,
     })
     .eq("event_id", event.id)
     .is("enrichment_source", null);
 
   if (!result) return "failed";
-  if (!result.sources.length) return "skipped";
+  if (!hasContent) return "skipped";
 
   // Insert one event_verifications row per source.
   // Each INSERT fires trg_verification_confidence → compute_event_confidence().
@@ -564,6 +611,7 @@ async function processEvent(
 //   - Would benefit from enrichment (missing key fields or low confidence)
 //
 // Ordered oldest-first for FIFO queue behavior.
+// Includes talent names via event_talent join for use in the search prompt.
 // ---------------------------------------------------------------------------
 
 async function fetchEventsNeedingEnrichment(
@@ -576,8 +624,9 @@ async function fetchEventsNeedingEnrichment(
        time_start, time_end, date_raw,
        location_name, location_address,
        description, contact, event_url,
-       confidence_score,
-       organizations ( name )`
+       confidence_score, enrichment_attempt_count,
+       organizations ( name ),
+       event_talent ( billing_position, talent ( name ) )`
     )
     .eq("is_active", true)
     .neq("flyer_style", "minimal")
@@ -591,15 +640,19 @@ async function fetchEventsNeedingEnrichment(
   return (data ?? []).map((row: any) => ({
     ...row,
     organization_name: row.organizations?.name ?? null,
+    talent_names: (row.event_talent ?? [])
+      .sort((a: any, b: any) =>
+        (a.billing_position ?? 999) - (b.billing_position ?? 999)
+      )
+      .map((et: any) => et.talent?.name)
+      .filter(Boolean),
     organizations: undefined,
+    event_talent: undefined,
   }));
 }
 
 // ---------------------------------------------------------------------------
 // Main handler
-//
-// Called by the Supabase Cron job every minute. No request body needed.
-// Auth is handled by Supabase JWT (Enforce JWT enabled in function settings).
 // ---------------------------------------------------------------------------
 
 Deno.serve(async (req: Request) => {
@@ -635,12 +688,10 @@ Deno.serve(async (req: Request) => {
     const locationCtx = await resolveLocationContext(supabase, event.id);
     const outcome = await processEvent(supabase, event, locationCtx);
     counts[outcome]++;
+    console.log(
+      `enrich: ${event.name} (attempt #${event.enrichment_attempt_count + 1}) → ${outcome}`
+    );
   }
-
-  console.log(
-    `enrich: processed ${events.length} events — ` +
-      `enriched=${counts.enriched} skipped=${counts.skipped} failed=${counts.failed}`
-  );
 
   return new Response(JSON.stringify(counts), {
     headers: { "Content-Type": "application/json" },

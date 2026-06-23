@@ -1,120 +1,110 @@
-import { createClient } from '@supabase/supabase-js'
-import { NextResponse } from 'next/server'
+// app/api/events/[id]/tell-me-more/route.ts
+//
+// Returns board locations and enrichment data for the event card expansion.
+//
+// Two data sources:
+//   event_board_locations view — boards currently showing this flyer
+//   event_sightings.enrichment_data — web research produced by enrich function
+//
+// Contact display policy (enforced here, not just in the pipeline):
+//   enrichment_data.found.contact must be a public-facing URL only.
+//   This route sanitizes that field as a defense-in-depth measure —
+//   the enrich prompt already excludes personal contacts, but the
+//   route handler is the last line before the data reaches the client.
+//
+// Auth: uses SUPABASE_TELL_ME_MORE_KEY (service role scoped key).
+// The key scope is not the real access control — the sanitization here is.
 
-const PHONE_RE = /\b(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/g
-const EMAIL_RE = /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g
+import { createClient } from "@supabase/supabase-js";
+import { NextResponse } from "next/server";
+import type { EnrichmentData } from "@/lib/types/enrichment";
 
-function sanitizeUrl(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const v = value.trim()
-  return v.startsWith('http://') || v.startsWith('https://') ? v : null
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_TELL_ME_MORE_KEY!
+);
+
+// Patterns that indicate a personal contact rather than a public-facing URL.
+// A phone number or personal email should never reach the client.
+function isPersonalContact(value: string): boolean {
+  // Personal email: contains @ but is not a URL
+  if (value.includes("@") && !value.startsWith("http")) return true;
+  // Phone number: digits, spaces, dashes, parens, plus — no protocol
+  if (/^[\d\s\-()+.ext]+$/i.test(value.trim())) return true;
+  return false;
 }
 
-function sanitizeText(value: unknown): string | null {
-  if (typeof value !== 'string' || !value.trim()) return null
-  const cleaned = value.replace(PHONE_RE, '').replace(EMAIL_RE, '').trim()
-  return cleaned || null
-}
-
-const FIELD_LABELS: Record<string, string> = {
-  name: 'name',
-  date_start: 'date',
-  date_end: 'end date',
-  time_start: 'time',
-  time_end: 'end time',
-  location_name: 'venue',
-  location_address: 'address',
-  description: 'description',
-  price_raw: 'price',
-  event_url: 'link',
-  contact: 'contact',
+function sanitizeEnrichment(data: EnrichmentData): EnrichmentData {
+  if (!data.found?.contact) return data;
+  if (isPersonalContact(data.found.contact)) {
+    return {
+      ...data,
+      found: { ...data.found, contact: null },
+    };
+  }
+  return data;
 }
 
 export async function GET(
   _req: Request,
-  context: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id: eventId } = await context.params
+  const { id: eventId } = await params;
 
-  if (!eventId || typeof eventId !== 'string') {
-    return NextResponse.json({ error: 'Invalid event id' }, { status: 400 })
+  // Basic UUID format check — avoids hitting the DB on obviously bad input.
+  if (!/^[0-9a-f-]{36}$/i.test(eventId)) {
+    return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_TELL_ME_MORE_KEY!
-  )
+  // ── Board locations ───────────────────────────────────────────────────────
+  const { data: boards, error: boardsError } = await supabase
+    .from("event_board_locations")
+    .select(
+      "board_id, location_name, board_description, last_seen_at, lat, lng, " +
+      "managed_by, requires_entry_to_photograph"
+    )
+    .eq("event_id", eventId)
+    .order("last_seen_at", { ascending: false });
 
-  const [boardsRes, verifyRes, sightingRes] = await Promise.all([
-    supabase
-      .from('event_board_locations')
-      .select('board_id, location_name, board_description, last_seen_at, lat, lng, managed_by, requires_entry_to_photograph')
-      .eq('event_id', eventId)
-      .order('last_seen_at', { ascending: false }),
-
-    supabase
-      .from('event_verifications')
-      .select('source_url, source_type, verified_fields')
-      .eq('event_id', eventId)
-      .order('trust_weight', { ascending: false }),
-
-    supabase
-      .from('event_sightings')
-      .select('enrichment_data')
-      .eq('event_id', eventId)
-      .not('enrichment_data', 'is', null)
-      .order('sighted_at', { ascending: false })
-      .limit(1)
-      .single(),
-  ])
-
-  console.log(boardsRes.error);
-
-  // Deduplicate verifications by source_url.
-  // The enrich function may insert multiple rows for the same URL if it
-  // ran more than once for this event (e.g. after a new sighting re-queued it).
-  // Merge confirmed fields across duplicate rows so each source appears once.
-  const verificationMap = new Map<string, { source_type: string; confirmed: Set<string> }>()
-  for (const v of verifyRes.data ?? []) {
-    const raw = v.verified_fields as Record<string, boolean> | null
-    const fields = raw
-      ? Object.entries(raw).filter(([, ok]) => ok).map(([k]) => FIELD_LABELS[k] ?? k)
-      : []
-    const existing = verificationMap.get(v.source_url)
-    if (existing) {
-      fields.forEach((f) => existing.confirmed.add(f))
-    } else {
-      verificationMap.set(v.source_url, {
-        source_type: v.source_type as string,
-        confirmed: new Set(fields),
-      })
-    }
+  if (boardsError) {
+    console.error(`tell-me-more boards error for ${eventId}:`, boardsError);
   }
-  const verifications = Array.from(verificationMap.entries()).map(([url, v]) => ({
-    source_url: url,
-    source_type: v.source_type,
-    confirmed: Array.from(v.confirmed),
-  }))
 
-  // Extract and sanitize enrichment_data.found.
-  // The pipeline stores raw web results without filtering — sanitize here.
-  type RawFound = Record<string, unknown>
-  const rawFound = (sightingRes.data?.enrichment_data as { found?: RawFound } | null)?.found ?? null
+  // ── Enrichment data ───────────────────────────────────────────────────────
+  // Take the most recent sighting that has enrichment data.
+  // The enrich function writes the same enrichment_data to all unenriched
+  // sightings for an event in a single pass, so any of them will do —
+  // most recent is safest in case of a re-enrichment.
+  const { data: sighting, error: sightingError } = await supabase
+    .from("event_sightings")
+    .select("enrichment_data")
+    .eq("event_id", eventId)
+    .not("enrichment_data", "is", null)
+    .order("sighted_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  const enrichmentFound = rawFound
-    ? {
-        date_start:       (rawFound.date_start as string | null) ?? null,
-        time_start:       (rawFound.time_start as string | null) ?? null,
-        location_address: (rawFound.location_address as string | null) ?? null,
-        event_url:        sanitizeUrl(rawFound.event_url),
-        contact:          sanitizeUrl(rawFound.contact),
-        description:      sanitizeText(rawFound.description),
-      }
-    : null
+  if (sightingError) {
+    console.error(`tell-me-more enrichment error for ${eventId}:`, sightingError);
+  }
+
+  const rawEnrichment = sighting?.enrichment_data as EnrichmentData | null;
+
+  // Discard old-format enrichment data that predates the new shape.
+  // Old format stored everything inside found{} with no top-level description,
+  // talent, or venue_context. The new card can't render it meaningfully and
+  // would show an empty "Found online" section. Return null so the card
+  // treats the event as unenriched until the enrich function re-processes it.
+  const hasNewFormat = rawEnrichment && (
+    rawEnrichment.description !== undefined ||
+    Array.isArray(rawEnrichment.talent) ||
+    rawEnrichment.venue_context !== undefined
+  );
+
+  const enrichment = hasNewFormat ? sanitizeEnrichment(rawEnrichment!) : null;
 
   return NextResponse.json({
-    boards: boardsRes.data ?? [],
-    verifications,
-    enrichment_found: enrichmentFound,
-  })
+    boards: boards ?? [],
+    enrichment,
+  });
 }

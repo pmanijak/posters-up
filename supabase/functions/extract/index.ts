@@ -339,6 +339,7 @@ Deno.serve(async (req) => {
   const skipped: { name: string; reason: string }[] = [];
 
   for (const item of extractedItems) {
+    try {
     if (!item.name) {
       skipped.push({ name: "(unnamed)", reason: "Missing name field" });
       continue;
@@ -504,14 +505,34 @@ Deno.serve(async (req) => {
           ...(item.is_outdoor != null && { is_outdoor: item.is_outdoor }),
           ...(item.is_public  != null && { is_public:  item.is_public }),
           ...(item.rsvp_required != null && { rsvp_required: item.rsvp_required }),
-          // Reset enrichment queue so enrich re-runs with fresh sighting data
-          enrichment_attempted_at: null,
+          // enrichment_attempted_at is NOT reset here unconditionally.
+          // maybe_reenqueue_enrichment() below decides whether to re-queue
+          // based on verification status and whether new search signal arrived.
         })
         .eq("id", eventId);
 
       if (updateError) {
         warnings.push(`Event merge failed for "${item.name}" (id: ${eventId}): ${updateError.message}`);
         console.error("Event update error:", JSON.stringify(updateError));
+      }
+
+      // Re-queue enrichment only if it would produce a different result:
+      //   - no verifications yet (previous run found nothing or was rejected)
+      //   AND
+      //   - this sighting brings a new event_url (stronger search anchor)
+      // If the event already has verifications, a correct local source was
+      // found — don't pay to re-search.
+      const { error: reenqueueError } = await supabase.rpc(
+        "maybe_reenqueue_enrichment",
+        {
+          p_event_id:      eventId,
+          p_new_event_url: item.event_url ?? null,
+        }
+      );
+
+      if (reenqueueError) {
+        warnings.push(`maybe_reenqueue_enrichment failed for "${item.name}": ${reenqueueError.message}`);
+        console.error("maybe_reenqueue_enrichment error:", JSON.stringify(reenqueueError));
       }
     }
 
@@ -618,6 +639,10 @@ Deno.serve(async (req) => {
     }
 
     results.push({ event_id: eventId, name: item.name, match_type: matchType });
+    } catch (err: any) {
+      console.error(`Unhandled error processing item "${item.name ?? '(unnamed)'}":`, err);
+      skipped.push({ name: item.name ?? '(unnamed)', reason: `Unhandled error: ${err?.message ?? err}` });
+    }
   }
 
   // ── Done ──────────────────────────────────────────────────────────────────

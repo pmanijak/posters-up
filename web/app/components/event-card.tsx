@@ -7,6 +7,7 @@ import { useSearchParams } from 'next/navigation'
 import { categoryColor, hexToRgba } from '@/lib/categories'
 import { seenAgo, staleness } from '@/lib/dates'
 import { sourceDomain } from '@/lib/format'
+import type { TellMeMoreData, EnrichmentData } from '@/lib/types/enrichment'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -50,39 +51,6 @@ interface Event {
   talent: TalentEntry[]
 }
 
-interface BoardLocation {
-  board_id: string
-  location_name: string | null
-  board_description: string | null
-  last_seen_at: string
-  lat: number
-  lng: number
-  managed_by: string | null
-  requires_entry_to_photograph: boolean | null
-}
-
-interface EnrichmentFound {
-  date_start: string | null
-  time_start: string | null
-  location_address: string | null
-  event_url: string | null
-  contact: string | null
-  description: string | null
-}
-
-interface TellMeMoreData {
-  boards: BoardLocation[]
-  verifications: { source_url: string; source_type: string; confirmed: string[] }[]
-  enrichment_found: EnrichmentFound | null
-}
-
-interface Supplements {
-  date: string | null
-  address: string | null
-  description: string | null
-  link: string | null
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function formatTime(h: number, m: number): string {
@@ -117,18 +85,6 @@ function formatDate(event: Event): string {
   return 'DATE TBD'
 }
 
-function formatFoundDate(dateStr: string, timeStr?: string | null): string {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  const datePart = new Date(year, month - 1, day).toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-  })
-  if (timeStr) {
-    const [h, m] = timeStr.split(':').map(Number)
-    return `${datePart} · ${formatTime(h, m)}`
-  }
-  return datePart
-}
-
 function formatTalent(talent: TalentEntry[]): string | null {
   if (!talent.length) return null
   return talent.map((t) => t.name).join(' · ')
@@ -149,23 +105,139 @@ function highlightText(text: string, query: string, color: string): ReactNode {
 async function fetchTellMeMore(eventId: string): Promise<TellMeMoreData> {
   try {
     const res = await fetch(`/api/events/${eventId}/tell-me-more`)
-    if (!res.ok) return { boards: [], verifications: [], enrichment_found: null }
+    if (!res.ok) return { boards: [], enrichment: null }
     return await res.json()
   } catch {
-    return { boards: [], verifications: [], enrichment_found: null }
+    return { boards: [], enrichment: null }
   }
 }
 
-function getSupplements(event: Event, found: EnrichmentFound | null): Supplements {
-  if (!found) return { date: null, address: null, description: null, link: null }
-  return {
-    date: event.date_type !== 'specific' && found.date_start
-      ? formatFoundDate(found.date_start, found.time_start)
-      : null,
-    address:     !event.location_address             ? found.location_address : null,
-    description: !event.description                  ? found.description      : null,
-    link:        !(event.event_url ?? event.contact) ? (found.event_url ?? found.contact) : null,
-  }
+// ── Enrichment section ─────────────────────────────────────────────────────
+
+function EnrichmentSection({
+  enrichment,
+  accentColor,
+}: {
+  enrichment: EnrichmentData
+  accentColor: string
+}) {
+  // Narrative content: something worth reading, not just structural data.
+  // Talent only counts if at least one entry has displayable details —
+  // a name-only entry with no bio, genre, or links renders nothing.
+  const hasNarrativeContent =
+    enrichment.description ||
+    enrichment.talent?.some(t => t.bio || (t.genre?.length ?? 0) > 0 || (t.links?.length ?? 0) > 0) ||
+    enrichment.venue_context
+
+  const hasAnything =
+    hasNarrativeContent ||
+    enrichment.ticket_url ||
+    enrichment.found?.location_address ||
+    enrichment.found?.event_url
+
+  if (!hasAnything) return null
+
+  return (
+    <div className="space-y-3">
+      {/* Header and sources only when there's something worth reading */}
+      {hasNarrativeContent && (
+        <p className="text-xs text-content-muted uppercase tracking-wider">Found online</p>
+      )}
+
+      {/* Narrative description — the main thing */}
+      {enrichment.description && (
+        <p className="text-sm leading-relaxed text-content-secondary">
+          {enrichment.description}
+        </p>
+      )}
+
+      {/* Primary link — ticket or event URL, right after the description */}
+      {enrichment.ticket_url ? (
+        <a
+          href={enrichment.ticket_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-xs font-medium"
+          style={{ color: enrichment.sold_out ? 'var(--color-content-muted)' : accentColor }}
+        >
+          {enrichment.sold_out ? 'Sold out' : 'Get tickets →'}
+        </a>
+      ) : enrichment.found?.event_url ? (
+        <a
+          href={enrichment.found.event_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-xs"
+          style={{ color: accentColor }}
+        >
+          {sourceDomain(enrichment.found.event_url)} →
+        </a>
+      ) : null}
+
+      {/* Per-talent context */}
+      {enrichment.talent?.map((t) => {
+        const hasDetails = t.bio || (t.genre && t.genre.length > 0) || t.links.length > 0
+        if (!hasDetails) return null
+        return (
+          <div key={t.name} className="space-y-1">
+            <p className="text-xs font-medium text-content-secondary">{t.name}</p>
+            {t.bio && (
+              <p className="text-xs leading-relaxed text-content-muted">{t.bio}</p>
+            )}
+            {t.genre && t.genre.length > 0 && (
+              <p className="text-xs text-content-muted">{t.genre.join(' · ')}</p>
+            )}
+            {t.links.length > 0 && (
+              <div className="flex flex-wrap gap-3">
+                {t.links.map((l) => (
+                  <a
+                    key={l.url}
+                    href={l.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs"
+                    style={{ color: accentColor }}
+                  >
+                    {l.label} →
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* Venue context — only if it adds something the description didn't cover */}
+      {enrichment.venue_context && (
+        <p className="text-xs leading-relaxed text-content-muted">
+          {enrichment.venue_context}
+        </p>
+      )}
+
+      {/* Address gap-fill — only if the flyer didn't have it */}
+      {enrichment.found?.location_address && (
+        <p className="text-xs text-content-muted">{enrichment.found.location_address}</p>
+      )}
+
+      {/* Source attribution — only when there's narrative content to attribute */}
+      {hasNarrativeContent && (enrichment.sources?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 pt-1">
+          <span className="text-xs text-content-muted">Sources:</span>
+          {enrichment.sources.map((s) => (
+            <a
+              key={s.url}
+              href={s.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-content-muted hover:text-content-secondary transition-colors underline"
+            >
+              {s.label}
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── Card ───────────────────────────────────────────────────────────────────
@@ -213,9 +285,6 @@ export function EventCard({ event }: { event: Event }) {
     }
     setExpanded((v) => !v)
   }
-
-  const supplements    = data ? getSupplements(event, data.enrichment_found) : null
-  const hasSupplements = supplements !== null && Object.values(supplements).some(Boolean)
 
   return (
     <div className="rounded-sm overflow-hidden bg-surface-card">
@@ -337,7 +406,7 @@ export function EventCard({ event }: { event: Event }) {
               onClick={handleToggle}
               className="text-xs text-content-muted"
             >
-              {expanded ? 'Less ↑' : 'Find this poster ↓'}
+              {expanded ? 'Less ↑' : 'Tell me more ↓'}
             </button>
           )}
         </div>
@@ -349,13 +418,22 @@ export function EventCard({ event }: { event: Event }) {
               <p className="text-xs text-content-muted">Loading…</p>
             ) : (
               <>
+                {/* Enrichment — suppressed for minimal flyers */}
+                {!isMinimal && data?.enrichment && (
+                  <EnrichmentSection
+                    enrichment={data.enrichment}
+                    accentColor={accentColor}
+                  />
+                )}
+
+                {/* Board locations */}
                 {data && data.boards.length > 0 ? (
                   <div>
-                    {isMinimal && (
-                      <p className="text-xs text-content-muted mb-2">
-                        This flyer is your best source of info
-                      </p>
-                    )}
+                    <p className="text-xs text-content-muted mb-2">
+                      {isMinimal
+                        ? 'This flyer is your best source of info'
+                        : 'Spotted on these boards'}
+                    </p>
                     <ul className="space-y-2">
                       {data.boards.map((b) => {
                         const { label, fresh } = staleness(b.last_seen_at)
@@ -401,34 +479,6 @@ export function EventCard({ event }: { event: Event }) {
                 ) : data ? (
                   <p className="text-xs text-red-400/50">board data unavailable</p>
                 ) : null}
-
-                {!isMinimal && hasSupplements && supplements && (
-                  <div className="space-y-1.5">
-                    <p className="text-xs text-content-muted">Found online</p>
-                    {supplements.date && (
-                      <p className="text-sm text-content-secondary">{supplements.date}</p>
-                    )}
-                    {supplements.address && (
-                      <p className="text-sm text-content-secondary">{supplements.address}</p>
-                    )}
-                    {supplements.description && (
-                      <p className="text-sm leading-relaxed text-content-muted">
-                        {supplements.description}
-                      </p>
-                    )}
-                    {supplements.link && (
-                      <a
-                        href={supplements.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block text-xs"
-                        style={{ color: accentColor }}
-                      >
-                        {sourceDomain(supplements.link)} →
-                      </a>
-                    )}
-                  </div>
-                )}
               </>
             )}
           </div>
