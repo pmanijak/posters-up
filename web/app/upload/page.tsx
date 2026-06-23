@@ -117,7 +117,7 @@ export default function UploadPage() {
       })
   }, [results?.board_id])
 
-  // Send a 6-digit OTP to their email.
+  // Send a 8-digit OTP to their email.
   async function sendOtp() {
     setSubmitting(true)
     setError(null)
@@ -301,20 +301,20 @@ export default function UploadPage() {
                 type="text"
                 inputMode="numeric"
                 pattern="[0-9]*"
-                maxLength={6}
-                placeholder="6-digit code"
+                maxLength={8}
+                placeholder="8-digit code"
                 value={code}
                 onChange={e => {
                   const val = e.target.value.replace(/\D/g, '')
                   setCode(val)
-                  if (val.length === 6) verifyCode()
+                  if (val.length === 8) verifyCode()
                 }}
                 disabled={submitting}
                 className="w-full bg-surface-card border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle tracking-widest disabled:opacity-50"
               />
               <button
                 onClick={verifyCode}
-                disabled={submitting || code.length < 6}
+                disabled={submitting || code.length < 8}
                 className="w-full bg-content-secondary text-surface-page rounded px-3 py-2 text-sm font-medium disabled:opacity-50"
               >
                 {submitting ? 'Verifying…' : 'Continue'}
