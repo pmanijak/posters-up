@@ -315,7 +315,7 @@ export default function UploadPage() {
                 className="w-full bg-surface-card border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle tracking-widest disabled:opacity-50"
               />
               <button
-                onClick={verifyCode}
+                onClick={() => verifyCode()}
                 disabled={submitting || code.length < 8}
                 className="w-full bg-content-secondary text-surface-page rounded px-3 py-2 text-sm font-medium disabled:opacity-50"
               >
