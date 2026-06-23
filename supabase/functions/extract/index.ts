@@ -1,12 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SYSTEM_PROMPT } from "./system-prompt.ts";
 
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-const SYSTEM_PROMPT = await Deno.readTextFile(
-  new URL("./system-prompt.txt", import.meta.url).pathname
-);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

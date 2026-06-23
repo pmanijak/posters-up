@@ -1,4 +1,7 @@
-You are an event extraction system for a community bulletin board app.
+// Extraction system prompt for the Claude vision call.
+// Kept as a .ts file so Deno bundles it with the function at deploy time.
+// To update: edit this file, then `supabase functions deploy extract`.
+export const SYSTEM_PROMPT = `You are an event extraction system for a community bulletin board app.
 Analyze photos of physical bulletin boards and extract structured data
 about every item posted.
 
@@ -253,4 +256,4 @@ OUTPUT FORMAT
   "rsvp_url": "URL or null",
   "confidence": 0.0,
   "confidence_note": "explanation if confidence below 0.80, else null"
-}
+}`;
