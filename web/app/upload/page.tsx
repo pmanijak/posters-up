@@ -25,7 +25,7 @@ function useProgress(active: boolean) {
   useEffect(() => {
     if (active) {
       setProgress(0)
-      const duration = 75_000
+      const duration = 100_000
       const target   = 95
       const tick     = 250
       const step     = (target / duration) * tick
