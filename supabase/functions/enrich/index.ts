@@ -25,7 +25,7 @@
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY")!;
+const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_ENRICH_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
@@ -422,7 +422,13 @@ async function callEnrichmentApi(
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
       max_tokens: 2000,
-      system: ENRICHMENT_SYSTEM_PROMPT,
+      system: [
+        {
+          type: "text",
+          text: ENRICHMENT_SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        }
+      ],
       messages: [{ role: "user", content: userMessage }],
       tools: [{
         type: "web_search_20250305",
