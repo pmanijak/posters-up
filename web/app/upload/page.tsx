@@ -130,13 +130,15 @@ export default function UploadPage() {
     setSubmitting(false)
   }
 
-  // Verify the OTP code, then immediately register a passkey for next time.
-  async function verifyCode() {
+  // Verify the OTP code. Accepts an optional token override for the auto-submit
+  // case where state hasn't updated yet when verifyCode is called from onChange.
+  async function verifyCode(tokenOverride?: string) {
+    const token = tokenOverride ?? code
     setSubmitting(true)
     setError(null)
     const { data, error } = await supabase.auth.verifyOtp({
       email,
-      token: code,
+      token,
       type: 'email',
     })
     if (error) {
@@ -307,7 +309,7 @@ export default function UploadPage() {
                 onChange={e => {
                   const val = e.target.value.replace(/\D/g, '')
                   setCode(val)
-                  if (val.length === 8) verifyCode()
+                  if (val.length === 8) verifyCode(val)
                 }}
                 disabled={submitting}
                 className="w-full bg-surface-card border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle tracking-widest disabled:opacity-50"
