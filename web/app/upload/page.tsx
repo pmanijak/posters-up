@@ -67,15 +67,17 @@ export default function UploadPage() {
   const supabase = createClient()
 
   // Auth
-  const [email, setEmail]     = useState('')
-  const [sent, setSent]       = useState(false)
-  const [user, setUser]       = useState<any>(null)
-  const [loading, setLoading] = useState(true)
+  const [user, setUser]         = useState<any>(null)
+  const [loading, setLoading]   = useState(true)
+  const [step, setStep]         = useState<'email' | 'code'>('email')
+  const [email, setEmail]       = useState('')
+  const [code, setCode]         = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError]       = useState<string | null>(null)
 
   // Upload
   const [uploading, setUploading] = useState(false)
   const [results, setResults]     = useState<any>(null)
-  const [error, setError]         = useState<string | null>(null)
   const [showRaw, setShowRaw]     = useState(false)
 
   // Board details submission
@@ -115,13 +117,37 @@ export default function UploadPage() {
       })
   }, [results?.board_id])
 
-  async function signIn() {
+  // Send a 6-digit OTP to their email.
+  async function sendOtp() {
+    setSubmitting(true)
+    setError(null)
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` }
+      options: { shouldCreateUser: true },
     })
     if (error) setError(error.message)
-    else setSent(true)
+    else setStep('code')
+    setSubmitting(false)
+  }
+
+  // Verify the OTP code, then immediately register a passkey for next time.
+  async function verifyCode() {
+    setSubmitting(true)
+    setError(null)
+    const { data, error } = await supabase.auth.verifyOtp({
+      email,
+      token: code,
+      type: 'email',
+    })
+    if (error) {
+      setError(error.message)
+      setSubmitting(false)
+      return
+    }
+    if (data.user) {
+      setUser(data.user)
+    }
+    setSubmitting(false)
   }
 
   async function upload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -239,28 +265,63 @@ export default function UploadPage() {
 
       <div className="flex justify-center px-4 pt-16">
         <div className="w-full max-w-sm space-y-4">
-          {sent ? (
-            <p className="text-sm text-content-secondary">
-              Check your email for a sign-in link.
-            </p>
-          ) : (
+
+          {/* Email OTP */}
+          {step === 'email' ? (
             <div className="space-y-3">
               <input
                 type="email"
                 placeholder="your@email.com"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && signIn()}
-                className="w-full bg-surface-card border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle"
+                onKeyDown={e => e.key === 'Enter' && sendOtp()}
+                disabled={submitting}
+                className="w-full bg-surface-card border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle disabled:opacity-50"
               />
               <button
-                onClick={signIn}
-                className="w-full bg-content-secondary text-surface-page rounded px-3 py-2 text-sm font-medium"
+                onClick={sendOtp}
+                disabled={submitting || !email.trim()}
+                className="w-full bg-content-secondary text-surface-page rounded px-3 py-2 text-sm font-medium disabled:opacity-50"
               >
-                Send sign-in link
+                {submitting ? 'Sending…' : 'Send code'}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-content-muted">
+                Code sent to {email}.{' '}
+                <button
+                  onClick={() => { setStep('email'); setCode(''); setError(null) }}
+                  className="underline hover:text-content-secondary"
+                >
+                  Change
+                </button>
+              </p>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                placeholder="6-digit code"
+                value={code}
+                onChange={e => {
+                  const val = e.target.value.replace(/\D/g, '')
+                  setCode(val)
+                  if (val.length === 6) verifyCode()
+                }}
+                disabled={submitting}
+                className="w-full bg-surface-card border border-edge rounded px-3 py-2 text-sm text-content-primary placeholder:text-content-muted focus:outline-none focus:border-edge-subtle tracking-widest disabled:opacity-50"
+              />
+              <button
+                onClick={verifyCode}
+                disabled={submitting || code.length < 6}
+                className="w-full bg-content-secondary text-surface-page rounded px-3 py-2 text-sm font-medium disabled:opacity-50"
+              >
+                {submitting ? 'Verifying…' : 'Continue'}
               </button>
             </div>
           )}
+
           {error && <p className="text-sm text-red-400">{error}</p>}
         </div>
       </div>
