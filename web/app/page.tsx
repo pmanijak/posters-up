@@ -49,39 +49,27 @@ export default async function DiscoverPage({
   let eventList: any[] = []
 
   if (!noBoardsNearby) {
-    const { data: localFlyers } = await supabase
-      .from('board_flyers')
-      .select('event_id')
-      .in('board_id', nearbyBoardIds)
-      .eq('is_active', true)
+    let query = supabase
+      .rpc('events_for_boards', { board_ids: nearbyBoardIds })
+      .or(
+        `and(date_start.lte.${thirtyDaysOut},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),date_type.in.(recurring,approximate,unknown)`
+      )
 
-    const localEventIds = (localFlyers ?? []).map((f: { event_id: string }) => f.event_id)
-
-    if (localEventIds.length > 0) {
-      let query = supabase
-        .from('events_public')
-        .select('*')
-        .in('id', localEventIds)
-        .or(
-          `and(date_start.lte.${thirtyDaysOut},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),date_type.in.(recurring,approximate,unknown)`
-        )
-
-      if (category && category !== 'all' && !q) {
-        query = query.eq('event_category', category)
-      }
-
-      if (q) {
-        query = query.ilike('search_text', `%${q}%`)
-      }
-
-      const { data: events, error } = await query.limit(500)
-
-      if (error) {
-        console.error('events_public query failed:', error)
-      }
-
-      eventList = events ?? []
+    if (category && category !== 'all' && !q) {
+      query = query.eq('event_category', category)
     }
+
+    if (q) {
+      query = query.ilike('search_text', `%${q}%`)
+    }
+
+    const { data: events, error } = await query.limit(500)
+
+    if (error) {
+      console.error('events_public query failed:', error)
+    }
+
+    eventList = events ?? []
   }
 
   const DATE_TYPE_PRIORITY: Record<string, number> = {
