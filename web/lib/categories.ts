@@ -7,6 +7,7 @@ export const CATEGORIES = [
   { value: 'film',          label: 'Film' },
   { value: 'theater',       label: 'Theater' },
   { value: 'dance',         label: 'Dance' },
+  { value: 'party',         label: 'Party' },
   { value: 'comedy',        label: 'Comedy' },
   { value: 'spoken_word',   label: 'Spoken Word' },
   { value: 'visual_art',    label: 'Art' },
