@@ -571,6 +571,24 @@ async function processEvent(
     .eq("event_id", event.id)
     .is("enrichment_source", null);
 
+  // Flag the event so the card can show "Tell me more" without a round-trip.
+  // Only set when there is genuine narrative content — a ticket URL or
+  // gap-fill address alone doesn't warrant the label change.
+  if (hasContent) {
+    const hasNarrative = result && (
+      result.description !== null ||
+      result.talent.some(t => t.bio || (t.genre?.length ?? 0) > 0 || t.links.length > 0) ||
+      result.venue_context !== null
+    );
+
+    if (hasNarrative) {
+      await supabase
+        .from("events")
+        .update({ has_enrichment: true })
+        .eq("id", event.id);
+    }
+  }
+
   if (!result) return "failed";
   if (!hasContent) return "skipped";
 

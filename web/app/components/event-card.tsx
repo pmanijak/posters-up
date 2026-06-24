@@ -46,6 +46,7 @@ interface Event {
   confidence_score: number
   sighting_count: number
   last_sighted_at: string
+  has_enrichment: boolean
   organization_name: string | null
   venue_name: string | null
   talent: TalentEntry[]
@@ -265,7 +266,9 @@ export function EventCard({ event }: { event: Event }) {
     ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
     : null
 
-  const hasSomethingToShow = linkHref !== null || event.sighting_count > 0
+  const collapsedLabel = (!isMinimal && event.has_enrichment)
+    ? 'Tell me more ↓'
+    : 'Find this poster ↓'
 
   function tagHref(tag: string): string {
     const params = new URLSearchParams(searchParams.toString())
@@ -400,13 +403,13 @@ export function EventCard({ event }: { event: Event }) {
               {seenAgo(event.last_sighted_at)}
             </span>
           </div>
-          {hasSomethingToShow && (
+          {(linkHref !== null || event.sighting_count > 0) && (
             <button
               type="button"
               onClick={handleToggle}
               className="text-xs text-content-muted"
             >
-              {expanded ? 'Less ↑' : 'Tell me more ↓'}
+              {expanded ? 'Less ↑' : collapsedLabel}
             </button>
           )}
         </div>
