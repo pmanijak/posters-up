@@ -1,5 +1,5 @@
 'use client'
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
 type FiltersCtx = {
@@ -26,6 +26,12 @@ export function FiltersProvider({
   const router = useRouter()
   const searchParams = useSearchParams()
   const [query, setQuery] = useState(initialQuery ?? '')
+
+  // Sync local state when URL changes (e.g. back/forward navigation)
+  // without remounting the tree via key prop.
+  useEffect(() => {
+    setQuery(initialQuery ?? '')
+  }, [initialQuery])
 
   const pushParams = useCallback((updates: Record<string, string | null>) => {
     const params = new URLSearchParams(searchParams.toString())
