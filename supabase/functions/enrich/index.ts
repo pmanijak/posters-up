@@ -395,7 +395,7 @@ If you found nothing useful after searching: {"description":null,"talent":[],"ve
 async function callEnrichmentApi(
   event: EventRow,
   locationCtx: LocationContext | null
-): Promise<EnrichmentData | null> {
+): Promise<{ failed: boolean; data: EnrichmentData | null }> {
   const userLocation = locationCtx?.userLocation ?? null;
   const knownLines: string[] = [];
 
@@ -470,7 +470,7 @@ async function callEnrichmentApi(
   if (!response.ok) {
     const body = await response.text();
     console.error(`Anthropic API error for event ${event.id}:`, response.status, body);
-    return null;
+    return { failed: true, data: null };
   }
 
   const data = await response.json();
@@ -478,7 +478,7 @@ async function callEnrichmentApi(
   const textBlocks = (data.content as Array<{ type: string; text?: string }>)
     .filter((b) => b.type === "text" && b.text);
 
-  if (textBlocks.length === 0) return null;
+  if (textBlocks.length === 0) return { failed: true, data: null };
 
   const raw = textBlocks.map((b) => b.text!).join("").trim();
 
@@ -501,18 +501,21 @@ async function callEnrichmentApi(
     parsed = JSON.parse(extractJson(raw));
   } catch (e) {
     console.error(`JSON parse failed for event ${event.id}:`, e, "\nRaw:", raw.slice(0, 300));
-    return null;
+    return { failed: true, data: null };
   }
 
   // Normalize to a safe EnrichmentData shape with defaults for required fields.
   return {
-    description:   parsed.description   ?? null,
-    talent:        Array.isArray(parsed.talent) ? parsed.talent : [],
-    venue_context: parsed.venue_context ?? null,
-    ticket_url:    parsed.ticket_url    ?? null,
-    sold_out:      parsed.sold_out      ?? null,
-    found:         parsed.found         ?? {},
-    sources:       Array.isArray(parsed.sources) ? parsed.sources : [],
+    failed: false,
+    data: {
+      description:   parsed.description   ?? null,
+      talent:        Array.isArray(parsed.talent) ? parsed.talent : [],
+      venue_context: parsed.venue_context ?? null,
+      ticket_url:    parsed.ticket_url    ?? null,
+      sold_out:      parsed.sold_out      ?? null,
+      found:         parsed.found         ?? {},
+      sources:       Array.isArray(parsed.sources) ? parsed.sources : [],
+    },
   };
 }
 
@@ -541,12 +544,21 @@ async function processEvent(
   event: EventRow,
   locationCtx: LocationContext | null
 ): Promise<"enriched" | "skipped" | "failed"> {
-  const result = await callEnrichmentApi(event, locationCtx);
+  const { failed, data: result } = await callEnrichmentApi(event, locationCtx);
 
   // Mark attempted regardless of outcome — prevents retry storms on events
   // with no web footprint. extract resets enrichment_attempted_at via
   // maybe_reenqueue_enrichment() only when meaningful new signal arrives.
   await markAttempted(supabase, event.id);
+
+  // Write enrichment status so we can distinguish API failures from
+  // genuine empty results without re-queuing unnecessarily.
+  await supabase
+    .from("events")
+    .update({ enrichment_status: failed ? "failed" : "complete" })
+    .eq("id", event.id);
+
+  if (failed) return "failed";
 
   // Determine whether we found anything worth storing.
   // Store if any meaningful content was returned — even a good description
@@ -589,14 +601,13 @@ async function processEvent(
     }
   }
 
-  if (!result) return "failed";
   if (!hasContent) return "skipped";
 
   // Insert one event_verifications row per source.
   // Each INSERT fires trg_verification_confidence → compute_event_confidence().
   // This is the only path by which enrichment affects the events table —
   // indirectly, via the confidence trigger.
-  for (const source of result.sources) {
+  for (const source of result!.sources) {
     if (!source.url) continue;
 
     const sourceType = validSourceType(source.source_type ?? classifySourceByUrl(source.url));
