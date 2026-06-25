@@ -4,6 +4,7 @@ import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'
 import { SearchInput } from './components/search-input'
 import { EventCard } from './components/event-card'
+import { AboutCard } from './components/about-card'
 import { CityPicker, type CityOption } from './components/city-picker'
 import { PageHeader } from './components/page-header'
 import { resolveLocation } from '@/lib/location'
@@ -34,8 +35,10 @@ export default async function DiscoverPage({
   const pacificTime = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Los_Angeles',
   })
-  const today         = pacificTime.format(new Date(Date.now() - 3 * 60 * 60 * 1000))
-  const thirtyDaysOut = pacificTime.format(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
+  const now           = Date.now() - 3 * 60 * 60 * 1000
+  const today         = pacificTime.format(new Date(now))
+  const fourDaysOut   = pacificTime.format(new Date(Date.now() + 4  * 24 * 60 * 60 * 1000))
+  const thirtyDaysOut = pacificTime.format(new Date(now + 30 * 24 * 60 * 60 * 1000))
 
   const { data: nearbyBoards } = await supabase.rpc('boards_near', { lat, lng })
   const nearbyBoardIds = (nearbyBoards ?? []).map((b: { id: string }) => b.id)
@@ -105,6 +108,24 @@ export default async function DiscoverPage({
     ]
   }
 
+  // About card injection — only in the unfiltered default view.
+  // Scans the sorted list for the first natural break: a non-specific event
+  // (recurring, approximate, unknown) or a specific event past the 7-day window.
+  // That break point is where the About card slots in.
+  // Minimum position of 3 so it never appears at the very top.
+  const isFiltered = !!(q || (category && category !== 'all'))
+  let aboutAt = eventList.length // default: end of list
+  if (!isFiltered) {
+    const MIN_POSITION = 3
+    for (let i = 0; i < eventList.length; i++) {
+      const e = eventList[i]
+      if (e.date_type !== 'specific' || !e.date_start || e.date_start > fourDaysOut) {
+        aboutAt = Math.max(i, MIN_POSITION)
+        break
+      }
+    }
+  }
+
   return (
     <div className="min-h-screen bg-surface-page">
 
@@ -138,9 +159,14 @@ export default async function DiscoverPage({
               <EmptyState category={category} q={q} />
             ) : (
               <div className="space-y-3">
-                {eventList.map((event) => (
-                  <EventCard key={event.id} event={event} />
-                ))}
+                {eventList.flatMap((event, i) => {
+                  const cards = []
+                  if (!isFiltered && i === aboutAt) cards.push(<AboutCard key="__about" />)
+                  cards.push(<EventCard key={event.id} event={event} />)
+                  return cards
+                })}
+                {/* About card at end if it falls beyond the list */}
+                {!isFiltered && aboutAt >= eventList.length && <AboutCard key="__about" />}
                 <p className="text-center text-xs pt-4 text-content-muted">
                   {eventList.length} event{eventList.length !== 1 ? 's' : ''}
                   {!q && category && category !== 'all' ? ` · ${category}` : ''}
