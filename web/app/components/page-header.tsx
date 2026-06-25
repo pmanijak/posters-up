@@ -7,9 +7,9 @@ import { CITY_COOKIE } from '@/lib/constants'
 import type { CityOption } from './city-picker'
 
 interface PageHeaderProps {
-  cityLabel:   string | null
-  cities:      CityOption[]
-  isDetected:  boolean
+  cityLabel?:  string | null
+  cities?:     CityOption[]
+  isDetected?: boolean
   // Text before the city picker button. Defaults to the events-page phrasing.
   subtitle?:   string
   // When provided, called on city/geo pick instead of router.push('/?...').
@@ -26,9 +26,9 @@ interface PageHeaderProps {
 type DetectState = 'idle' | 'detecting' | 'error'
 
 export function PageHeader({
-  cityLabel,
-  cities,
-  isDetected,
+  cityLabel = null,
+  cities = [],
+  isDetected = false,
   subtitle = 'Events from the bulletin boards around',
   onCityPick,
   leftSlot,
@@ -141,18 +141,20 @@ export function PageHeader({
           </div>
 
           {/* Subtitle + city picker — own line, centered to share axis with brand */}
-          <div className="text-sm mt-1 text-content-muted text-center">
-            {subtitle}{' '}
-            <button
-              onClick={() => (open ? closeAndReset() : openTray())}
-              className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors py-1 -my-1"
-              aria-expanded={open}
-              aria-haspopup="dialog"
-            >
-              <span className="underline underline-offset-2 decoration-dotted">{label}</span>
-              <span className={`text-content-muted inline-block transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▾</span>
-            </button>
-          </div>
+          {(cities.length > 0 || cityLabel) && (
+            <div className="text-sm mt-1 text-content-muted text-center">
+              {subtitle}{' '}
+              <button
+                onClick={() => (open ? closeAndReset() : openTray())}
+                className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors py-1 -my-1"
+                aria-expanded={open}
+                aria-haspopup="dialog"
+              >
+                <span className="underline underline-offset-2 decoration-dotted">{label}</span>
+                <span className={`text-content-muted inline-block transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▾</span>
+              </button>
+            </div>
+          )}
 
         </div>
       </header>

@@ -16,6 +16,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest } from 'next/server'
+import { SITE_URL } from '@/lib/site'
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages'
 const MODEL         = 'claude-haiku-4-5-20251001'  // Haiku for cost; ~$0.001/query
@@ -76,6 +77,7 @@ const SEARCH_TOOL = {
 
 function formatEvent(event: any, enrichment: any): string {
   const lines: string[] = [`**${event.name}**`]
+  lines.push(`URL: ${SITE_URL}/events/${event.id}`)
 
   if (event.event_category) lines.push(`Category: ${event.event_category}`)
 
@@ -196,8 +198,6 @@ async function executeSearch(input: {
 }
 
 // ── System prompt ──────────────────────────────────────────────────────────
-
-// ── System prompt ──────────────────────────────────────────────────────────
 //
 // Split into a static cacheable block and a dynamic date block.
 // The static block is marked cache_control: ephemeral — Anthropic caches it
@@ -215,6 +215,7 @@ don't answer from memory. For broad questions like "what's on this weekend," \
 pass appropriate date_from/date_to filters. For specific queries, use the query field.
 
 When presenting events:
+- When mentioning a specific event by name, link it using a relative path: [Event Name](/events/EVENT_ID?ref=chat)
 - Write like a knowledgeable local, not a database printout
 - Weave in the enrichment context (artist bios, venue vibe) when you have it — it makes events come alive
 - Call out free events and age restrictions when relevant

@@ -181,6 +181,17 @@ export function ChatInterface() {
                           strong: ({ children }) => <strong className="font-semibold text-content-primary">{children}</strong>,
                           ul:     ({ children }) => <ul className="mt-1 mb-2 space-y-1 last:mb-0">{children}</ul>,
                           li:     ({ children }) => <li className="flex gap-2"><span className="text-content-muted shrink-0">·</span><span>{children}</span></li>,
+                          a:      ({ href, children }) => {
+                            return (
+                              <a
+                                href={href}
+                                target={href?.startsWith('/') ? '_self' : '_blank'}
+                                rel={href?.startsWith('/') ? undefined : 'noopener noreferrer'}
+                                className="underline underline-offset-2 decoration-dotted text-content-secondary hover:text-content-primary transition-colors"                              >
+                                {children}
+                              </a>
+                            )
+                          },
                         }}
                       >
                         {m.content}
@@ -234,7 +245,7 @@ export function ChatInterface() {
           </button>
         </form>
       </div>
-
+ 
     </div>
   )
 }

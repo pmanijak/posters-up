@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -243,9 +243,9 @@ function EnrichmentSection({
 
 // ── Card ───────────────────────────────────────────────────────────────────
 
-export function EventCard({ event }: { event: Event }) {
+export function EventCard({ event, defaultExpanded = false }: { event: Event, defaultExpanded: boolean }) {
   const searchParams = useSearchParams()
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const [data, setData] = useState<TellMeMoreData | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -288,6 +288,17 @@ export function EventCard({ event }: { event: Event }) {
     }
     setExpanded((v) => !v)
   }
+
+  // Auto-fetch on mount when starting in expanded state (e.g. dedicated event page)
+  useEffect(() => {
+    if (defaultExpanded) {
+      setLoading(true)
+      fetchTellMeMore(event.id).then(result => {
+        setData(result)
+        setLoading(false)
+      })
+    }
+  }, [defaultExpanded, event.id])
 
   return (
     <div className="rounded-sm overflow-hidden bg-surface-card">
