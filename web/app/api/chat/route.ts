@@ -175,7 +175,7 @@ async function executeSearch(input: {
   }
 
   // Fetch enrichment for all returned events in one query
-  const ids = events.map(e => e.id)
+  const ids = (events as any[]).map(e => e.id)
   const { data: sightings } = await supabase
     .from('event_sightings')
     .select('event_id, enrichment_data, sighted_at')
