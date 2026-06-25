@@ -1,4 +1,26 @@
+import type { Metadata } from 'next'
 import { Suspense } from 'react'
+
+import { SITE_TITLE, SITE_DESCRIPTION, SITE_URL } from '@/lib/site'
+
+export const metadata: Metadata = {
+  title:       SITE_TITLE,
+  description: SITE_DESCRIPTION,
+  openGraph: {
+    title:       SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    url:         SITE_URL,
+    siteName:    SITE_TITLE,
+    type:        'website',
+    images:      [{ url: '/og.jpg', width: 1200, height: 630 }],
+  },
+  twitter: {
+    card:        'summary_large_image',
+    title:       SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images:      ['/og.jpg'],
+  },
+}
 import { createClient } from '@supabase/supabase-js'
 import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'

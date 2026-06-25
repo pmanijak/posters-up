@@ -18,9 +18,12 @@ const permanentMarker = Permanent_Marker({
   variable: "--font-permanent-marker",
 });
 
+import { SITE_TITLE, SITE_DESCRIPTION } from '@/lib/site'
+
 export const metadata: Metadata = {
-  title: "Posters Up",
-  description: "Events from the bulletin boards around Olympia",
+  metadataBase: new URL("https://postersup.org"),
+  title:        SITE_TITLE,
+  description:  SITE_DESCRIPTION,
 };
 
 export default function RootLayout({
