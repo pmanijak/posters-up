@@ -191,7 +191,7 @@ async function executeSearch(input: {
     }
   }
 
-  const blocks = events.map(e => formatEvent(e, enrichmentMap.get(e.id) ?? null))
+  const blocks = (events as any[]).map(e => formatEvent(e, enrichmentMap.get(e.id) ?? null))
   return `Found ${events.length} event${events.length !== 1 ? 's' : ''}:\n\n${blocks.join('\n\n---\n\n')}`
 }
 
