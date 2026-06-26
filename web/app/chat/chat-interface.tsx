@@ -1,4 +1,4 @@
-'use client'
+"use client";
 
 // app/chat/chat-interface.tsx
 //
@@ -12,149 +12,159 @@
 // (e.g. tapping an event link) doesn't lose the conversation.
 // sessionStorage dies with the tab — no cross-session persistence.
 
-import { useState, useRef, useEffect, type FormEvent } from 'react'
-import ReactMarkdown from 'react-markdown'
+import { useState, useRef, useEffect, type FormEvent } from "react";
+import ReactMarkdown from "react-markdown";
 
 interface Message {
-  role:    'user' | 'assistant'
-  content: string
+  role: "user" | "assistant";
+  content: string;
 }
 
-const STORAGE_KEY = 'chat-messages'
+const STORAGE_KEY = "chat-messages";
 
 const SUGGESTIONS = [
-  'What\'s on this weekend?',
-  'Any free shows coming up?',
-  'Music this week?',
-  'Anything all-ages?',
-]
+  "What's on this weekend?",
+  "Any free shows coming up?",
+  "Music this week?",
+  "Anything all-ages?",
+];
 
 export function ChatInterface() {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input,    setInput]    = useState('')
-  const [loading,  setLoading]  = useState(false)
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const inputRef  = useRef<HTMLInputElement>(null)
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Restore messages from sessionStorage on mount
   useEffect(() => {
     try {
-      const saved = sessionStorage.getItem(STORAGE_KEY)
-      if (saved) setMessages(JSON.parse(saved))
+      const saved = sessionStorage.getItem(STORAGE_KEY);
+      if (saved) setMessages(JSON.parse(saved));
     } catch {}
-  }, [])
+  }, []);
 
-  // Persist messages to sessionStorage whenever they change
-    useEffect(() => {
+  // Persist messages to sessionStorage whenever they change.
+  // Guard against empty array clobbering a saved session on mount.
+  useEffect(() => {
     try {
-        if (messages.length > 0) {
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages))
-        }
+      if (messages.length > 0) {
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+      }
     } catch {}
-    }, [messages])
+  }, [messages]);
 
   // Scroll to bottom whenever messages update
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   async function submit(text: string) {
-    if (!text.trim() || loading) return
+    if (!text.trim() || loading) return;
 
-    const userMsg: Message = { role: 'user', content: text.trim() }
-    setInput('')
-    setLoading(true)
+    const userMsg: Message = { role: "user", content: text.trim() };
+    setInput("");
+    setLoading(true);
 
     // Optimistically add user message + empty assistant placeholder
-    setMessages(prev => [...prev, userMsg, { role: 'assistant', content: '' }])
+    setMessages((prev) => [
+      ...prev,
+      userMsg,
+      { role: "assistant", content: "" },
+    ]);
 
     try {
-      const res = await fetch('/api/chat', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           // Send the full history so Claude has conversation context,
           // but exclude the empty placeholder we just added.
-          messages: [...messages, userMsg].map(m => ({
-            role:    m.role,
+          messages: [...messages, userMsg].map((m) => ({
+            role: m.role,
             content: m.content,
           })),
         }),
-      })
+      });
 
-      if (!res.ok) throw new Error(`${res.status}`)
+      if (!res.ok) throw new Error(`${res.status}`);
 
-      const reader  = res.body!.getReader()
-      const decoder = new TextDecoder()
-      let   buffer  = ''
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
 
       while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+        const { done, value } = await reader.read();
+        if (done) break;
 
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
 
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const data = line.slice(6).trim()
-          if (!data) continue
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (!data) continue;
 
           try {
-            const payload = JSON.parse(data)
+            const payload = JSON.parse(data);
 
             if (payload.text) {
               // Append streamed text to the assistant placeholder
-              setMessages(prev => {
-                const next = [...prev]
+              setMessages((prev) => {
+                const next = [...prev];
                 next[next.length - 1] = {
                   ...next[next.length - 1],
                   content: next[next.length - 1].content + payload.text,
-                }
-                return next
-              })
+                };
+                return next;
+              });
             }
 
             if (payload.error) {
-              setMessages(prev => {
-                const next = [...prev]
-                next[next.length - 1] = { role: 'assistant', content: payload.error }
-                return next
-              })
+              setMessages((prev) => {
+                const next = [...prev];
+                next[next.length - 1] = {
+                  role: "assistant",
+                  content: payload.error,
+                };
+                return next;
+              });
             }
           } catch {}
         }
       }
-
     } catch {
-      setMessages(prev => {
-        const next = [...prev]
+      setMessages((prev) => {
+        const next = [...prev];
         next[next.length - 1] = {
-          role:    'assistant',
-          content: 'Something went wrong. Try again.',
-        }
-        return next
-      })
+          role: "assistant",
+          content: "Something went wrong. Try again.",
+        };
+        return next;
+      });
     } finally {
-      setLoading(false)
-      inputRef.current?.focus()
+      setLoading(false);
+      inputRef.current?.focus();
     }
   }
 
   function handleSubmit(e: FormEvent) {
-    e.preventDefault()
-    submit(input)
+    e.preventDefault();
+    submit(input);
+  }
+
+  function clearChat() {
+    setMessages([]);
+    sessionStorage.removeItem(STORAGE_KEY);
   }
 
   return (
     // flex-1 fills the space below PageHeader (parent is flex-col)
     <div className="flex-1 flex flex-col min-h-0">
-
       {/* ── Message list ─────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-4 py-6">
-
           {messages.length === 0 ? (
             // Empty state — suggestions act as quick-start prompts
             <div className="pt-12 space-y-8">
@@ -167,7 +177,7 @@ export function ChatInterface() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {SUGGESTIONS.map(s => (
+                {SUGGESTIONS.map((s) => (
                   <button
                     key={s}
                     type="button"
@@ -184,31 +194,56 @@ export function ChatInterface() {
               {messages.map((m, i) => (
                 <div
                   key={i}
-                  className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
                 >
                   <div
                     className={`
-                      max-w-[85%] rounded-sm px-4 py-3 text-sm leading-relaxed
-                      ${m.role === 'user'
-                        ? 'bg-surface-raised text-content-primary'
-                        : 'bg-surface-card text-content-secondary'}
+                      text-sm leading-relaxed
+                      ${
+                        m.role === "user"
+                          ? "max-w-[85%] rounded-sm px-4 py-3 bg-surface-raised text-content-primary"
+                          : "w-full text-content-secondary"
+                      }
                     `}
                   >
                     {/* Show ellipsis while the assistant placeholder is empty */}
-                    {m.role === 'user' ? (
+                    {m.role === "user" ? (
                       m.content
                     ) : m.content ? (
                       <ReactMarkdown
                         components={{
-                          p:      ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                          strong: ({ children }) => <strong className="font-semibold text-content-primary">{children}</strong>,
-                          ul:     ({ children }) => <ul className="mt-1 mb-2 space-y-1 last:mb-0">{children}</ul>,
-                          li:     ({ children }) => <li className="flex gap-2"><span className="text-content-muted shrink-0">·</span><span>{children}</span></li>,
-                          a:      ({ href, children }) => (
+                          p: ({ children }) => (
+                            <p className="mb-2 last:mb-0">{children}</p>
+                          ),
+                          strong: ({ children }) => (
+                            <strong className="font-semibold text-content-primary">
+                              {children}
+                            </strong>
+                          ),
+                          ul: ({ children }) => (
+                            <ul className="mt-1 mb-2 space-y-1 last:mb-0">
+                              {children}
+                            </ul>
+                          ),
+                          li: ({ children }) => (
+                            <li className="flex gap-2">
+                              <span className="text-content-muted shrink-0">
+                                ·
+                              </span>
+                              <span>{children}</span>
+                            </li>
+                          ),
+                          a: ({ href, children }) => (
                             <a
                               href={href}
-                              target={href?.startsWith('/') ? '_self' : '_blank'}
-                              rel={href?.startsWith('/') ? undefined : 'noopener noreferrer'}
+                              target={
+                                href?.startsWith("/") ? "_self" : "_blank"
+                              }
+                              rel={
+                                href?.startsWith("/")
+                                  ? undefined
+                                  : "noopener noreferrer"
+                              }
                               className="underline underline-offset-2 decoration-dotted text-content-secondary hover:text-content-primary transition-colors"
                             >
                               {children}
@@ -227,7 +262,6 @@ export function ChatInterface() {
               <div ref={bottomRef} />
             </div>
           )}
-
         </div>
       </div>
 
@@ -240,7 +274,7 @@ export function ChatInterface() {
           <input
             ref={inputRef}
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={(e) => setInput(e.target.value)}
             placeholder="What's happening this week?"
             disabled={loading}
             autoComplete="off"
@@ -265,9 +299,21 @@ export function ChatInterface() {
           >
             Send
           </button>
+          {messages.length > 0 && (
+            <button
+              type="button"
+              onClick={clearChat}
+              className="
+                px-4 py-2 text-sm rounded-sm
+                border border-edge
+                text-content-muted hover:text-content-secondary
+                transition-colors whitespace-nowrap"
+            >
+              New chat
+            </button>
+          )}
         </form>
       </div>
-
     </div>
-  )
+  );
 }
