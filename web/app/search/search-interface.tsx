@@ -38,6 +38,7 @@ const SUGGESTIONS = [
   'Any free shows coming up?',
   'Music this week?',
   'Anything all-ages?',
+  'Surprise me?',
 ]
 
 export function SearchInterface() {
