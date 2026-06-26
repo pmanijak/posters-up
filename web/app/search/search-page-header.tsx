@@ -11,7 +11,7 @@ import Link from 'next/link'
 import { PageHeader } from '@/app/components/page-header'
 import type { CityOption } from '@/app/components/city-picker'
 
-export function ChatPageHeader({ cities, cityLabel }: { cities: CityOption[], cityLabel: string | null }) {
+export function SearchPageHeader({ cities, cityLabel }: { cities: CityOption[], cityLabel: string | null }) {
   const router = useRouter()
 
   return (
@@ -21,7 +21,7 @@ export function ChatPageHeader({ cities, cityLabel }: { cities: CityOption[], ci
           ← Events
         </Link>
       }
-      subtitle="Chatting about events around"
+      subtitle="Search the posters around"
       cityLabel={cityLabel}
       cities={cities}
       isDetected={false}

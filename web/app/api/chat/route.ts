@@ -1,4 +1,4 @@
-// app/api/search/route.ts
+// app/api/chat/route.ts
 //
 // Streaming chat endpoint for the events assistant.
 //

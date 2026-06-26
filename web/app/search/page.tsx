@@ -5,15 +5,15 @@ import { createClient } from '@supabase/supabase-js'
 import { SITE_TITLE, SITE_URL } from '@/lib/site'
 import { buildCityOptions } from '@/lib/cities'
 import { resolveLocation } from '@/lib/location'
-import { ChatPageHeader } from './search-page-header'
-import { ChatInterface } from './search-interface'
+import { SearchPageHeader } from './search-page-header'
+import { SearchInterface } from './search-interface'
 
 export const metadata: Metadata = {
-  title:       `Chat · ${SITE_TITLE}`,
-  description: "Chat with an AI that knows what's on the bulletin boards in Olympia, WA.",
+  title:       `Search · ${SITE_TITLE}`,
+  description: "Search the posters around town.",
   openGraph: {
-    title:       `Ask about events · ${SITE_TITLE}`,
-    description: "Chat with an AI that knows what's on the bulletin boards in Olympia, WA.",
+    title:       `Search · ${SITE_TITLE}`,
+    description: "Search the posters around town.",
     url:         `${SITE_URL}/search`,
     siteName:    SITE_TITLE,
     type:        'website',
@@ -30,7 +30,7 @@ interface SearchParams {
   lng?: string
 }
 
-export default async function ChatPage({
+export default async function SearchPage({
   searchParams,
 }: {
   searchParams: Promise<SearchParams>
@@ -49,8 +49,8 @@ export default async function ChatPage({
 
   return (
     <div className="h-dvh bg-surface-page flex flex-col">
-      <ChatPageHeader cities={availableCities} cityLabel={cityLabel} />
-      <ChatInterface />
+      <SearchPageHeader cities={availableCities} cityLabel={cityLabel} />
+      <SearchInterface />
     </div>
   )
 }
