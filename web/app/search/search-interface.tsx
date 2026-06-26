@@ -1,6 +1,6 @@
 "use client";
 
-// app/chat/chat-interface.tsx
+// app/search/search-interface.tsx
 //
 // Client component: message history, input, streaming response display.
 // Parent (page.tsx) renders PageHeader above this component.
@@ -20,7 +20,7 @@ interface Message {
   content: string;
 }
 
-const STORAGE_KEY = "chat-messages";
+const STORAGE_KEY = "search-messages";
 
 const SUGGESTIONS = [
   "What's on this weekend?",
@@ -74,7 +74,7 @@ export function ChatInterface() {
     ]);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -309,7 +309,7 @@ export function ChatInterface() {
                 text-content-muted hover:text-content-secondary
                 transition-colors whitespace-nowrap"
             >
-              New chat
+              New search
             </button>
           )}
         </form>

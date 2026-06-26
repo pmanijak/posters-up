@@ -1,12 +1,12 @@
-// app/chat/page.tsx
+// app/search/page.tsx
 
 import type { Metadata } from 'next'
 import { createClient } from '@supabase/supabase-js'
 import { SITE_TITLE, SITE_URL } from '@/lib/site'
 import { buildCityOptions } from '@/lib/cities'
 import { resolveLocation } from '@/lib/location'
-import { ChatPageHeader } from './chat-page-header'
-import { ChatInterface } from './chat-interface'
+import { ChatPageHeader } from './search-page-header'
+import { ChatInterface } from './search-interface'
 
 export const metadata: Metadata = {
   title:       `Chat · ${SITE_TITLE}`,
@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   openGraph: {
     title:       `Ask about events · ${SITE_TITLE}`,
     description: "Chat with an AI that knows what's on the bulletin boards in Olympia, WA.",
-    url:         `${SITE_URL}/chat`,
+    url:         `${SITE_URL}/search`,
     siteName:    SITE_TITLE,
     type:        'website',
   },

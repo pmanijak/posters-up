@@ -1,10 +1,10 @@
 'use client'
 
-// app/chat/chat-page-header.tsx
+// app/search/search-page-header.tsx
 //
-// Thin client wrapper around PageHeader for the chat page.
+// Thin client wrapper around PageHeader for the search page.
 // Overrides the default onCityPick navigation (which goes to /)
-// to stay on /chat with lat/lng as search params instead.
+// to stay on /search with lat/lng as search params instead.
 
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -29,7 +29,7 @@ export function ChatPageHeader({ cities, cityLabel }: { cities: CityOption[], ci
         const params = new URLSearchParams()
         params.set('lat', lat.toFixed(4))
         params.set('lng', lng.toFixed(4))
-        router.push(`/chat?${params.toString()}`)
+        router.push(`/search?${params.toString()}`)
       }}
     />
   )

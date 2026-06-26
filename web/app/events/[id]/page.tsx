@@ -110,8 +110,8 @@ export default async function EventPage({
   if (!event) notFound()
 
   const provenanceName = boardResult.data?.location_name ?? null
-  const backHref       = ref === 'chat' ? '/chat' : '/'
-  const backLabel      = ref === 'chat' ? '← Chat' : '← Events'
+  const backHref       = ref === 'search' ? '/search' : '/'
+  const backLabel      = ref === 'search' ? '← Search' : '← Events'
 
   const subtitle = provenanceName
     ? `Found on the bulletin board at ${provenanceName}`

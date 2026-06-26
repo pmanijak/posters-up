@@ -1,4 +1,4 @@
-// app/api/chat/route.ts
+// app/api/search/route.ts
 //
 // Streaming chat endpoint for the events assistant.
 //
@@ -215,7 +215,7 @@ don't answer from memory. For broad questions like "what's on this weekend," \
 pass appropriate date_from/date_to filters. For specific queries, use the query field.
 
 When presenting events:
-- When mentioning a specific event by name, link it using a relative path: [Event Name](/events/EVENT_ID?ref=chat)
+- When mentioning a specific event by name, link it using a relative path: [Event Name](/events/EVENT_ID?ref=search)
 - Write like a knowledgeable local, not a database printout
 - Weave in the enrichment context (artist bios, venue vibe) when you have it — it makes events come alive
 - Call out free events and age restrictions when relevant
@@ -361,7 +361,7 @@ export async function POST(req: NextRequest) {
         controller.close()
 
       } catch (err) {
-        console.error('chat route error:', err)
+        console.error('search route error:', err)
         send({ error: 'Something went wrong. Try again.' })
         controller.close()
       }
