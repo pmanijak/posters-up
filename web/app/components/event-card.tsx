@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -243,11 +243,22 @@ function EnrichmentSection({
 
 // ── Card ───────────────────────────────────────────────────────────────────
 
-export function EventCard({ event, defaultExpanded = false }: { event: Event, defaultExpanded: boolean }) {
+export function EventCard({ event, defaultExpanded = false }: { event: Event; defaultExpanded?: boolean }) {
   const searchParams = useSearchParams()
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [data, setData] = useState<TellMeMoreData | null>(null)
   const [loading, setLoading] = useState(false)
+
+  // Auto-fetch on mount when starting in expanded state (e.g. dedicated event page)
+  useEffect(() => {
+    if (defaultExpanded) {
+      setLoading(true)
+      fetchTellMeMore(event.id).then(result => {
+        setData(result)
+        setLoading(false)
+      })
+    }
+  }, [defaultExpanded, event.id])
 
   const q           = searchParams.get('q') ?? ''
   const isMinimal   = event.flyer_style === 'minimal'
@@ -288,17 +299,6 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event, de
     }
     setExpanded((v) => !v)
   }
-
-  // Auto-fetch on mount when starting in expanded state (e.g. dedicated event page)
-  useEffect(() => {
-    if (defaultExpanded) {
-      setLoading(true)
-      fetchTellMeMore(event.id).then(result => {
-        setData(result)
-        setLoading(false)
-      })
-    }
-  }, [defaultExpanded, event.id])
 
   return (
     <div className="rounded-sm overflow-hidden bg-surface-card">
@@ -396,24 +396,28 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event, de
           </div>
         )}
 
-        {/* Footer */}
+        {/* Footer — meta row hidden on dedicated event page */}
         <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-edge">
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-content-muted">
-              {event.sighting_count} board{event.sighting_count !== 1 ? 's' : ''}
-            </span>
-            <span className="text-xs font-mono text-content-muted">
-              {(event.confidence_score * 100).toFixed(0)}%
-            </span>
-            {isMinimal && (
-              <span className="text-xs px-1.5 py-0.5 rounded bg-surface-raised text-content-muted">
-                minimal
+          {!defaultExpanded ? (
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-content-muted">
+                {event.sighting_count} board{event.sighting_count !== 1 ? 's' : ''}
               </span>
-            )}
-            <span className="text-xs text-content-muted">
-              {seenAgo(event.last_sighted_at)}
-            </span>
-          </div>
+              <span className="text-xs font-mono text-content-muted">
+                {(event.confidence_score * 100).toFixed(0)}%
+              </span>
+              {isMinimal && (
+                <span className="text-xs px-1.5 py-0.5 rounded bg-surface-raised text-content-muted">
+                  minimal
+                </span>
+              )}
+              <span className="text-xs text-content-muted">
+                {seenAgo(event.last_sighted_at)}
+              </span>
+            </div>
+          ) : (
+            <div />
+          )}
           {(linkHref !== null || event.sighting_count > 0) && (
             <button
               type="button"

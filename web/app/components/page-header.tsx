@@ -11,6 +11,7 @@ interface PageHeaderProps {
   cities?:     CityOption[]
   isDetected?: boolean
   // Text before the city picker button. Defaults to the events-page phrasing.
+  // On the event page, passed as a standalone subtitle with no city picker.
   subtitle?:   string
   // When provided, called on city/geo pick instead of router.push('/?...').
   // Lets client pages (boards) re-fetch without a full navigation.
@@ -102,6 +103,11 @@ export function PageHeader({
   // null cityLabel after geo → "your location"; null without geo → "your area"
   const label = cityLabel ?? (isDetected ? 'your location' : 'your area')
 
+  // Show the subtitle row if there's a city picker to show OR a subtitle was
+  // explicitly passed (e.g. provenance line on the dedicated event page).
+  const hasCityPicker = cities.length > 0 || cityLabel !== null
+  const showSubtitle  = hasCityPicker || subtitle !== 'Events from the bulletin boards around'
+
   const defaultLeftSlot = (
     <Link
       href="/upload"
@@ -140,19 +146,25 @@ export function PageHeader({
             </div>
           </div>
 
-          {/* Subtitle + city picker — own line, centered to share axis with brand */}
-          {(cities.length > 0 || cityLabel) && (
+          {/* Subtitle row — city picker when available, plain text otherwise */}
+          {showSubtitle && (
             <div className="text-sm mt-1 text-content-muted text-center">
-              {subtitle}{' '}
-              <button
-                onClick={() => (open ? closeAndReset() : openTray())}
-                className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors py-1 -my-1"
-                aria-expanded={open}
-                aria-haspopup="dialog"
-              >
-                <span className="underline underline-offset-2 decoration-dotted">{label}</span>
-                <span className={`text-content-muted inline-block transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▾</span>
-              </button>
+              {hasCityPicker ? (
+                <>
+                  {subtitle}{' '}
+                  <button
+                    onClick={() => (open ? closeAndReset() : openTray())}
+                    className="inline-flex items-center gap-1.5 text-content-secondary hover:text-content-primary transition-colors py-1 -my-1"
+                    aria-expanded={open}
+                    aria-haspopup="dialog"
+                  >
+                    <span className="underline underline-offset-2 decoration-dotted">{label}</span>
+                    <span className={`text-content-muted inline-block transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▾</span>
+                  </button>
+                </>
+              ) : (
+                subtitle
+              )}
             </div>
           )}
 

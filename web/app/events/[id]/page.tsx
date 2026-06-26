@@ -94,15 +94,33 @@ export default async function EventPage({
 }) {
   const { id }  = await params
   const { ref } = await searchParams
-  const event   = await getEvent(id)
+
+  const [event, boardResult] = await Promise.all([
+    getEvent(id),
+    supabase
+      .from('event_board_locations')
+      .select('location_name')
+      .eq('event_id', id)
+      .not('location_name', 'is', null)
+      .order('last_seen_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ])
+
   if (!event) notFound()
 
-  const backHref  = ref === 'chat' ? '/chat' : '/'
-  const backLabel = ref === 'chat' ? '← Chat' : '← Events'
+  const provenanceName = boardResult.data?.location_name ?? null
+  const backHref       = ref === 'chat' ? '/chat' : '/'
+  const backLabel      = ref === 'chat' ? '← Chat' : '← Events'
+
+  const subtitle = provenanceName
+    ? `Found on the bulletin board at ${provenanceName}`
+    : undefined
 
   return (
     <div className="min-h-screen bg-surface-page">
       <PageHeader
+        subtitle={subtitle}
         leftSlot={
           <Link
             href={backHref}
@@ -122,7 +140,7 @@ export default async function EventPage({
       />
       <main className="max-w-2xl mx-auto px-4 py-4">
         <Suspense fallback={<div className="rounded-sm bg-surface-card h-40 animate-pulse" />}>
-          <EventCard event={event} defaultExpanded />
+          <EventCard event={event} />
         </Suspense>
       </main>
     </div>
