@@ -57,15 +57,26 @@ const SEARCH_TOOL = {
       },
       date_from: {
         type: 'string',
-        description: 'Only show events on or after this date (YYYY-MM-DD)',
+        description: 'Only show events on or after this date (YYYY-MM-DD). ' +
+          'Always derive this from natural language time references: ' +
+          '"this weekend" → coming Saturday, "next month" → first day of next month, ' +
+          '"in July" → 2026-07-01, "tomorrow" → tomorrow\'s date.',
       },
       date_to: {
         type: 'string',
-        description: 'Only show events on or before this date (YYYY-MM-DD)',
+        description: 'Only show events on or before this date (YYYY-MM-DD). ' +
+          'Always derive this from natural language time references: ' +
+          '"this weekend" → coming Sunday, "next month" → last day of next month, ' +
+          '"in July" → 2026-07-31.',
       },
       is_free: {
         type: 'boolean',
         description: 'If true, only return free events',
+      },
+      random: {
+        type: 'boolean',
+        description:
+          'If true, shuffle results randomly. Use for open-ended discovery queries like "surprise me" or "anything good?".',
       },
     },
   },
@@ -73,11 +84,17 @@ const SEARCH_TOOL = {
 
 // ── Format events for Claude ───────────────────────────────────────────────
 // Returns a plain-text block Claude can reason over.
+// Event name is pre-formatted as a markdown link so Claude never has to
+// construct links itself — which led to venue names being linked to "/".
 // Enrichment narrative is appended after flyer data.
+// random=true suppresses the buzz signal so surprise queries don't
+// gravitiate toward the most-promoted event and defeat the randomness.
 
-function formatEvent(event: any, enrichment: any): string {
-  const lines: string[] = [`**${event.name}**`]
-  lines.push(`URL: ${SITE_URL}/events/${event.id}`)
+function formatEvent(event: any, enrichment: any, random = false): string {
+  const lines: string[] = [
+    // Pre-formatted link — Claude copies this, never constructs its own
+    `**[${event.name}](/events/${event.id}?ref=search)**`,
+  ]
 
   if (event.event_category) lines.push(`Category: ${event.event_category}`)
 
@@ -130,6 +147,12 @@ function formatEvent(event: any, enrichment: any): string {
 
   if (event.tags?.length) lines.push(`Tags: ${event.tags.join(', ')}`)
 
+  // Sighting count — only surface when genuinely notable (3+ boards) and not
+  // a random/surprise query where it would bias Claude away from true variety.
+  if (!random && event.sighting_count >= 3) {
+    lines.push(`Buzz: spotted on ${event.sighting_count} boards around town`)
+  }
+
   return lines.join('\n')
 }
 
@@ -141,9 +164,14 @@ async function executeSearch(input: {
   date_from?: string
   date_to?:   string
   is_free?:   boolean
+  random?:    boolean
 }): Promise<string> {
-  const today      = pacificDate(0)
-  const thirtyOut  = pacificDate(30)
+  const today = pacificDate(0)
+
+  // Use Claude's date_to if provided; fall back to 30 days out for open-ended
+  // queries. This means "next month" or "in July" won't be silently truncated
+  // by a fixed 30-day window when Claude passes the correct date_to.
+  const windowEnd = input.date_to ?? pacificDate(30)
 
   // Query events_public — already filters by confidence and is_active
   let q = supabase
@@ -151,14 +179,18 @@ async function executeSearch(input: {
     .select(
       'id, name, event_category, date_type, date_start, date_end, ' +
       'time_start, date_raw, location_name, location_address, description, ' +
-      'price_raw, is_free, age_restriction, tags, talent'
+      'price_raw, is_free, age_restriction, tags, talent, sighting_count'
     )
     .or(
-      `and(date_start.lte.${thirtyOut},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),` +
+      `and(date_start.lte.${windowEnd},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),` +
       `date_type.in.(recurring,approximate,unknown)`
     )
+    // Primary: date ascending so results read chronologically.
+    // Secondary: confidence descending as a tiebreaker within the same day —
+    // better-verified events surface first when Claude reads the list top to bottom.
     .order('date_start', { ascending: true, nullsFirst: false })
-    .limit(12)
+    .order('confidence_score', { ascending: false })
+    .limit(50)
 
   if (input.query)              q = q.ilike('search_text', `%${input.query}%`)
   if (input.category)           q = q.eq('event_category', input.category)
@@ -176,8 +208,20 @@ async function executeSearch(input: {
     return 'No events found matching those criteria. New events are added as contributors photograph more boards around town.'
   }
 
+  // For random/surprise queries: shuffle and slice to a small set so Claude
+  // has genuine variety to choose from rather than always picking the same
+  // event from a consistent date-sorted list.
+  let results = events as any[]
+  if (input.random) {
+    for (let i = results.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [results[i], results[j]] = [results[j], results[i]]
+    }
+    results = results.slice(0, 3)
+  }
+
   // Fetch enrichment for all returned events in one query
-  const ids = (events as any[]).map(e => e.id)
+  const ids = results.map(e => e.id)
   const { data: sightings } = await supabase
     .from('event_sightings')
     .select('event_id, enrichment_data, sighted_at')
@@ -193,8 +237,8 @@ async function executeSearch(input: {
     }
   }
 
-  const blocks = (events as any[]).map(e => formatEvent(e, enrichmentMap.get(e.id) ?? null))
-  return `Found ${events.length} event${events.length !== 1 ? 's' : ''}:\n\n${blocks.join('\n\n---\n\n')}`
+  const blocks = results.map(e => formatEvent(e, enrichmentMap.get(e.id) ?? null, input.random))
+  return `Found ${results.length} event${results.length !== 1 ? 's' : ''}:\n\n${blocks.join('\n\n---\n\n')}`
 }
 
 // ── System prompt ──────────────────────────────────────────────────────────
@@ -204,7 +248,6 @@ async function executeSearch(input: {
 // for 5 minutes, saving input tokens on every query after the first.
 // The date block is appended as a plain text block (not cached) so the cache
 // key for the static portion stays stable across the day.
-// Requires the anthropic-beta: prompt-caching-2024-07-31 header.
 
 const SYSTEM_PROMPT_STATIC = `You are a helpful local events assistant for Posters Up (postersup.org), \
 an app that discovers events from physical bulletin boards around Olympia, WA. \
@@ -215,9 +258,11 @@ don't answer from memory. For broad questions like "what's on this weekend," \
 pass appropriate date_from/date_to filters. For specific queries, use the query field.
 
 When presenting events:
-- When mentioning a specific event by name, link it using a relative path: [Event Name](/events/EVENT_ID?ref=search)
+- Event names in the search results are already formatted as markdown links — use them as-is; never construct your own links or link venue names, tags, or any other text
 - Write like a knowledgeable local, not a database printout
 - Weave in the enrichment context (artist bios, venue vibe) when you have it — it makes events come alive
+- Events with a "Buzz" field are showing up on multiple boards around town — mention this naturally when relevant, it's a genuine signal of local promotion
+- Never use phrases like "here's what's worth your time" or similar phrases about what our time is worth
 - Call out free events and age restrictions when relevant
 - If nothing matches, say so simply and note that new events appear as more boards are photographed
 - Keep responses tight — most users are on mobile`
@@ -243,7 +288,6 @@ function claudeHeaders() {
     'Content-Type':      'application/json',
     'x-api-key':         process.env.ANTHROPIC_CHAT_API_KEY!,
     'anthropic-version': '2023-06-01',
-    'anthropic-beta':    'prompt-caching-2024-07-31',
   }
 }
 

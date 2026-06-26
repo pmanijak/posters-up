@@ -34,7 +34,7 @@ function randomEmoji(): string {
 }
 
 const SUGGESTIONS = [
-  'What\'s something fun happening?',
+  'What\'s going on this weekend?',
   'Any free shows coming up?',
   'Music this week?',
   'Anything all-ages?',
