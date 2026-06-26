@@ -7,6 +7,10 @@
 //
 // Message format sent to the API: {role: 'user'|'assistant', content: string}[]
 // Tool use is internal to the API route — this component never sees it.
+//
+// Chat history is persisted to sessionStorage so navigation away and back
+// (e.g. tapping an event link) doesn't lose the conversation.
+// sessionStorage dies with the tab — no cross-session persistence.
 
 import { useState, useRef, useEffect, type FormEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -15,6 +19,8 @@ interface Message {
   role:    'user' | 'assistant'
   content: string
 }
+
+const STORAGE_KEY = 'chat-messages'
 
 const SUGGESTIONS = [
   'What\'s on this weekend?',
@@ -29,6 +35,23 @@ export function ChatInterface() {
   const [loading,  setLoading]  = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef  = useRef<HTMLInputElement>(null)
+
+  // Restore messages from sessionStorage on mount
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(STORAGE_KEY)
+      if (saved) setMessages(JSON.parse(saved))
+    } catch {}
+  }, [])
+
+  // Persist messages to sessionStorage whenever they change
+    useEffect(() => {
+    try {
+        if (messages.length > 0) {
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages))
+        }
+    } catch {}
+    }, [messages])
 
   // Scroll to bottom whenever messages update
   useEffect(() => {
@@ -181,17 +204,16 @@ export function ChatInterface() {
                           strong: ({ children }) => <strong className="font-semibold text-content-primary">{children}</strong>,
                           ul:     ({ children }) => <ul className="mt-1 mb-2 space-y-1 last:mb-0">{children}</ul>,
                           li:     ({ children }) => <li className="flex gap-2"><span className="text-content-muted shrink-0">·</span><span>{children}</span></li>,
-                          a:      ({ href, children }) => {
-                            return (
-                              <a
-                                href={href}
-                                target={href?.startsWith('/') ? '_self' : '_blank'}
-                                rel={href?.startsWith('/') ? undefined : 'noopener noreferrer'}
-                                className="underline underline-offset-2 decoration-dotted text-content-secondary hover:text-content-primary transition-colors"                              >
-                                {children}
-                              </a>
-                            )
-                          },
+                          a:      ({ href, children }) => (
+                            <a
+                              href={href}
+                              target={href?.startsWith('/') ? '_self' : '_blank'}
+                              rel={href?.startsWith('/') ? undefined : 'noopener noreferrer'}
+                              className="underline underline-offset-2 decoration-dotted text-content-secondary hover:text-content-primary transition-colors"
+                            >
+                              {children}
+                            </a>
+                          ),
                         }}
                       >
                         {m.content}
@@ -245,7 +267,7 @@ export function ChatInterface() {
           </button>
         </form>
       </div>
- 
+
     </div>
   )
 }
