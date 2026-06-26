@@ -26,6 +26,7 @@ import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'
 import { SearchInput } from './components/search-input'
 import { EventCard } from './components/event-card'
+import { EventFeed } from './components/event-feed'
 import { AboutCard } from './components/about-card'
 import { CityPicker, type CityOption } from './components/city-picker'
 import { PageHeader } from './components/page-header'
@@ -168,7 +169,7 @@ export default async function DiscoverPage({
 
           <main className="max-w-2xl mx-auto px-4">
             <div className="my-3">
-              <SearchInput />
+              <SearchInput eventCount={eventList.length} initialQuery={q} />
             </div>
 
             {noBoardsNearby ? (
@@ -177,27 +178,29 @@ export default async function DiscoverPage({
               ) : (
                 <NoBoardsState />
               )
-            ) : eventList.length === 0 ? (
-              <EmptyState category={category} q={q} />
             ) : (
-              <div className="space-y-3">
-                {eventList.flatMap((event, i) => {
-                  const cards = []
-                  if (!isFiltered && i === aboutAt) cards.push(<AboutCard key="__about" />)
-                  cards.push(<EventCard key={event.id} event={event} />)
-                  return cards
-                })}
-                {/* About card at end if it falls beyond the list */}
-                {!isFiltered && aboutAt >= eventList.length && <AboutCard key="__about" />}
-                <p className="text-center text-xs pt-4 text-content-muted">
-                  {eventList.length} event{eventList.length !== 1 ? 's' : ''}
-                  {!q && category && category !== 'all' ? ` · ${category}` : ''}
-                  {q ? ` · "${q}"` : ''}
-                </p>
-              </div>
+              <EventFeed>
+                {eventList.length === 0 ? (
+                  <EmptyState category={category} q={q} />
+                ) : (
+                  <div className="space-y-3">
+                    {eventList.flatMap((event, i) => {
+                      const cards = []
+                      if (!isFiltered && i === aboutAt) cards.push(<AboutCard key="__about" />)
+                      cards.push(<EventCard key={event.id} event={event} />)
+                      return cards
+                    })}
+                    {!isFiltered && aboutAt >= eventList.length && <AboutCard key="__about" />}
+                    <p className="text-center text-xs pt-4 text-content-muted">
+                      {eventList.length} event{eventList.length !== 1 ? 's' : ''}
+                      {!q && category && category !== 'all' ? ` · ${category}` : ''}
+                      {q ? ` · "${q}"` : ''}
+                    </p>
+                  </div>
+                )}
+              </EventFeed>
             )}
           </main>
-
         </FiltersProvider>
       </Suspense>
 
@@ -228,13 +231,13 @@ function EmptyState({ category, q }: { category?: string; q?: string }) {
   return (
     <div className="text-center py-16">
       <p className="text-lg mb-2 font-marker text-content-primary">
-        No events found
+        {q ? 'Searching the boards…' : 'No events found'}
       </p>
       <p className="text-sm text-content-muted">
         {q
-          ? `Nothing matching "${q}". Try different words or clear the search.`
+          ? `Looking further for "${q}"…`
           : category && category !== 'all'
-          ? `No ${category} events coming up. Try a different category.`
+          ? `No ${category} events right now — try another category`
           : 'Nothing here yet — submit a photo to get started.'}
       </p>
       {category && category !== 'all' && !q ? (

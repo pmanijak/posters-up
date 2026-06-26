@@ -6,6 +6,8 @@ type FiltersCtx = {
   query: string
   setQuery: (v: string) => void
   pushParams: (updates: Record<string, string | null>) => void
+  hasInterpretedResults: boolean
+  setHasInterpretedResults: (v: boolean) => void
 }
 
 const FiltersContext = createContext<FiltersCtx | null>(null)
@@ -26,15 +28,9 @@ export function FiltersProvider({
   const router = useRouter()
   const searchParams = useSearchParams()
   const [query, setQuery] = useState(initialQuery ?? '')
-
-  // Track the last q value we pushed ourselves so the sync effect can
-  // distinguish "URL changed because user typed" from "URL changed because
-  // of back/forward navigation." Without this, the server re-render that
-  // follows a debounced push can overwrite the user's current input.
+  const [hasInterpretedResults, setHasInterpretedResults] = useState(false)
   const lastPushedQuery = useRef(initialQuery ?? '')
 
-  // Only sync local state from URL on genuine external navigation
-  // (back/forward), not on changes we triggered ourselves.
   useEffect(() => {
     const incoming = initialQuery ?? ''
     if (incoming !== lastPushedQuery.current) {
@@ -49,7 +45,6 @@ export function FiltersProvider({
       if (val === null || val === '') params.delete(key)
       else params.set(key, val)
     }
-    // Record what we're about to push before navigating
     if ('q' in updates) {
       lastPushedQuery.current = updates.q ?? ''
     }
@@ -57,7 +52,11 @@ export function FiltersProvider({
   }, [router, searchParams])
 
   return (
-    <FiltersContext.Provider value={{ query, setQuery, pushParams }}>
+    <FiltersContext.Provider value={{
+      query, setQuery,
+      pushParams,
+      hasInterpretedResults, setHasInterpretedResults,
+    }}>
       {children}
     </FiltersContext.Provider>
   )
