@@ -1,30 +1,36 @@
 // app/api/chat/route.ts
 //
-// Streaming chat endpoint for the events assistant.
+// Search endpoint for the events feed. Two-step, both forced:
+//   1. Claude calls search_events (date parsing, category, free, etc.)
+//   2. We run the query, then Claude calls present_results to assign each
+//      event to a plain-language group and write one orienting line.
 //
-// Flow per turn:
-//   1. First Claude call (non-streaming) — lets Claude decide to use search_events tool
-//   2. Execute the tool: query events_public + fetch enrichment from event_sightings
-//   3. Second Claude call (streaming) — answer piped back to client as SSE
+// Returns JSON (not SSE): { lead, groups:[{label, event_ids}], events:{id: row} }.
+// The client renders real EventCards from `events`; `groups` only carries
+// label + ordering. Claude never sees or builds links — it groups by ID.
 //
-// If Claude answers without a tool call (rare), the text is sent directly.
-// Conversation history is maintained by the client as plain {role, content} pairs;
-// tool_use/tool_result blocks are internal to this route and never sent to the client.
-//
-// Auth: uses SUPABASE_TELL_ME_MORE_KEY — same access level as tell-me-more route
-// (needs event_sightings, which is not in any public view).
+// Auth: SUPABASE_TELL_ME_MORE_KEY — needs event_sightings (not in any public view).
 
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest } from 'next/server'
-import { SITE_URL } from '@/lib/site'
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages'
-const MODEL         = 'claude-haiku-4-5-20251001'  // Haiku for cost; ~$0.001/query
+const MODEL         = 'claude-haiku-4-5-20251001'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_TELL_ME_MORE_KEY!
 )
+
+// Full card shape — must match the EventCard `Event` interface so cards render
+// identically to the home feed. Pulled from events_public (same view the feed uses).
+const CARD_COLUMNS =
+  'id, name, content_type, event_category, tags, flyer_style, date_type, ' +
+  'date_start, date_end, time_start, time_end, recurrence_rule, date_raw, ' +
+  'location_name, location_address, description, contact, event_url, ' +
+  'price_raw, is_free, age_restriction, is_outdoor, accessibility, ' +
+  'confidence_score, sighting_count, last_sighted_at, has_enrichment, ' +
+  'organization_name, venue_name, talent'
 
 // ── Date helpers ───────────────────────────────────────────────────────────
 
@@ -33,195 +39,174 @@ function pacificDate(offsetDays = 0): string {
     .format(new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000))
 }
 
-// ── Tool definition ────────────────────────────────────────────────────────
+// ── Tools ──────────────────────────────────────────────────────────────────
 
 const SEARCH_TOOL = {
   name: 'search_events',
   description:
-    "Search for events in Olympia, WA that have been spotted on local bulletin boards. " +
-    "Always call this tool before answering — don't rely on memory for current events.",
+    'Search events spotted on Olympia, WA bulletin boards. Always call before answering.',
   input_schema: {
     type: 'object',
     properties: {
       query: {
         type: 'string',
         description:
-          'Text to search in event names, descriptions, tags, and enrichment content. ' +
-          'Leave empty to get all upcoming events.',
+          'ONLY concrete tokens that would literally appear on a flyer: an artist or ' +
+          'band name, a genre word ("punk", "jazz"), a venue name. This is a literal ' +
+          'substring match, not a concept search. ' +
+          'Do NOT use it for moods, vibes, audiences, or occasions — "fun for singles", ' +
+          '"something low-key", "date night", "family friendly" are NOT flyer words and ' +
+          'will match nothing. For those, leave query EMPTY, pull the broad set with ' +
+          'date/category/is_free filters only, and sort it out in present_results. ' +
+          'When unsure whether a word is on the flyer or just the vibe, leave it empty.',
       },
       category: {
         type: 'string',
         description:
-          'Filter by category: music, film, theater, dance, comedy, spoken_word, ' +
-          'visual_art, market, workshop, community, fundraiser, party, other',
+          'music, film, theater, dance, comedy, spoken_word, visual_art, market, ' +
+          'workshop, community, fundraiser, party, other',
       },
       date_from: {
         type: 'string',
-        description: 'Only show events on or after this date (YYYY-MM-DD). ' +
-          'Always derive this from natural language time references: ' +
-          '"this weekend" → coming Saturday, "next month" → first day of next month, ' +
-          '"in July" → 2026-07-01, "tomorrow" → tomorrow\'s date.',
+        description: 'YYYY-MM-DD. Derive from natural language: "this weekend" → coming Saturday, ' +
+          '"next month" → first of next month, "in July" → 2026-07-01, "tomorrow" → tomorrow.',
       },
       date_to: {
         type: 'string',
-        description: 'Only show events on or before this date (YYYY-MM-DD). ' +
-          'Always derive this from natural language time references: ' +
-          '"this weekend" → coming Sunday, "next month" → last day of next month, ' +
-          '"in July" → 2026-07-31.',
+        description: 'YYYY-MM-DD. "this weekend" → coming Sunday, "next month" → last of next month.',
       },
-      is_free: {
-        type: 'boolean',
-        description: 'If true, only return free events',
-      },
-      random: {
-        type: 'boolean',
-        description:
-          'If true, shuffle results randomly. Use for open-ended discovery queries like "surprise me" or "anything good?".',
-      },
+      is_free: { type: 'boolean', description: 'If true, only free events.' },
+      random:  { type: 'boolean', description: 'Shuffle for "surprise me" / "anything good?".' },
     },
   },
 }
 
-// ── Format events for Claude ───────────────────────────────────────────────
-// Returns a plain-text block Claude can reason over.
-// Event name is pre-formatted as a markdown link so Claude never has to
-// construct links itself — which led to venue names being linked to "/".
-// Enrichment narrative is appended after flyer data.
-// random=true suppresses the buzz signal so surprise queries don't
-// gravitiate toward the most-promoted event and defeat the randomness.
+const PRESENT_TOOL = {
+  name: 'present_results',
+  description:
+    'Organize the search results for display. Write one short orienting line, then ' +
+    'sort the events into a few plain-language groups so the user can land on what ' +
+    'they want without scanning everything.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      lead: {
+        type: 'string',
+        description:
+          'ONE short sentence (max ~20 words) that orients the user to the set: which ' +
+          'piles exist, what stands out. Plain local voice, not an assistant voice. ' +
+          'Point at the events — never editorialize ("great show!"), never invent a ' +
+          'detail not in the data, never claim something is worth their time. If a read ' +
+          'is inferred (touring act, family-friendly), it must be supported by the ' +
+          'event data shown. Empty string if a single group covers everything.',
+      },
+      groups: {
+        type: 'array',
+        description:
+          '2–4 groups, each a real pile that exists in THESE results. Groups may cut ' +
+          'across category (free, all-ages, outdoor, late-night, touring). Use 1 group ' +
+          'only if the set is genuinely uniform. Every event need not be placed — ' +
+          'leftovers are shown under "More" automatically.',
+        items: {
+          type: 'object',
+          properties: {
+            label: {
+              type: 'string',
+              description: 'Plain, concrete, ≤3 words. e.g. "Free & outdoor", "All-ages shows", ' +
+                '"Family workshops". Never vague ("Vibes", "Picks") — that reads as a machine.',
+            },
+            event_ids: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'IDs from the results, in display order.',
+            },
+          },
+          required: ['label', 'event_ids'],
+        },
+      },
+    },
+    required: ['lead', 'groups'],
+  },
+}
 
-function formatEvent(event: any, enrichment: any, random = false): string {
-  const lines: string[] = [
-    // Pre-formatted link — Claude copies this, never constructs its own
-    `**[${event.name}](/events/${event.id}?ref=search)**`,
-  ]
+// ── Tool execution ─────────────────────────────────────────────────────────
+// Returns the full rows (for the client to render as cards) plus a compact
+// text block (for Claude to reason over and group by ID).
 
-  if (event.event_category) lines.push(`Category: ${event.event_category}`)
+function formatForPrompt(e: any, enrichment: any, random: boolean): string {
+  const lines: string[] = [`ID: ${e.id}`, `Name: ${e.name}`]
 
-  // Date / time
-  if (event.date_type === 'specific' && event.date_start) {
-    const [y, m, d] = event.date_start.split('-').map(Number)
-    const dateStr = new Date(y, m - 1, d).toLocaleDateString('en-US', {
+  if (e.event_category) lines.push(`Category: ${e.event_category}`)
+
+  if (e.date_type === 'specific' && e.date_start) {
+    const [y, m, d] = e.date_start.split('-').map(Number)
+    lines.push(`Date: ${new Date(y, m - 1, d).toLocaleDateString('en-US', {
       weekday: 'long', month: 'long', day: 'numeric',
-    })
-    if (event.time_start) {
-      const [h, min] = event.time_start.split(':').map(Number)
-      const ampm = h >= 12 ? 'PM' : 'AM'
-      const hour = h > 12 ? h - 12 : h === 0 ? 12 : h
-      lines.push(`Date: ${dateStr} at ${hour}:${String(min).padStart(2, '0')} ${ampm}`)
-    } else {
-      lines.push(`Date: ${dateStr}`)
-    }
-  } else if (event.date_raw) {
-    lines.push(`Date: ${event.date_raw}`)
-  } else if (event.date_type === 'recurring') {
+    })}`)
+  } else if (e.date_raw) {
+    lines.push(`Date: ${e.date_raw}`)
+  } else if (e.date_type === 'recurring') {
     lines.push('Recurring event')
   }
 
-  if (event.location_name)  lines.push(`Location: ${event.location_name}`)
-  if (event.location_address && !event.location_name) lines.push(`Address: ${event.location_address}`)
-
-  // Talent from flyer
-  const talent = event.talent as any[] | null
-  if (talent?.length) {
-    lines.push(`Featuring: ${talent.map((t: any) => t.name).join(', ')}`)
-  }
-
-  if (event.price_raw)     lines.push(`Price: ${event.price_raw}`)
-  else if (event.is_free)  lines.push('Price: Free')
-
-  if (event.age_restriction) lines.push(`Ages: ${event.age_restriction}`)
-
-  if (event.description) lines.push(`Description: ${event.description}`)
-
-  // Enrichment — appended after flyer data
+  if (e.location_name) lines.push(`Location: ${e.location_name}`)
+  if (e.talent?.length) lines.push(`Featuring: ${e.talent.map((t: any) => t.name).join(', ')}`)
+  if (e.price_raw)    lines.push(`Price: ${e.price_raw}`)
+  else if (e.is_free) lines.push('Price: Free')
+  if (e.age_restriction) lines.push(`Ages: ${e.age_restriction}`)
+  if (e.is_outdoor === true) lines.push('Outdoor')
+  if (e.description) lines.push(`Description: ${e.description}`)
   if (enrichment?.description) lines.push(`Context: ${enrichment.description}`)
   if (enrichment?.venue_context) lines.push(`Venue: ${enrichment.venue_context}`)
+  if (e.tags?.length) lines.push(`Tags: ${e.tags.join(', ')}`)
 
-  // Talent bios from enrichment
-  if (enrichment?.talent?.length) {
-    for (const t of enrichment.talent as any[]) {
-      if (t.bio) lines.push(`About ${t.name}: ${t.bio}`)
-    }
-  }
-
-  if (event.tags?.length) lines.push(`Tags: ${event.tags.join(', ')}`)
-
-  // Sighting count — only surface when genuinely notable (3+ boards) and not
-  // a random/surprise query where it would bias Claude away from true variety.
-  if (!random && event.sighting_count >= 3) {
-    lines.push(`Buzz: spotted on ${event.sighting_count} boards around town`)
+  // Buzz: suppressed for random queries so surprise picks don't bias to promoted.
+  if (!random && e.sighting_count >= 3) {
+    lines.push(`Buzz: on ${e.sighting_count} boards around town`)
   }
 
   return lines.join('\n')
 }
 
-// ── Tool execution ─────────────────────────────────────────────────────────
-
 async function executeSearch(input: {
-  query?:     string
-  category?:  string
-  date_from?: string
-  date_to?:   string
-  is_free?:   boolean
-  random?:    boolean
-}): Promise<string> {
-  const today = pacificDate(0)
-
-  // Use Claude's date_to if provided; fall back to 30 days out for open-ended
-  // queries. This means "next month" or "in July" won't be silently truncated
-  // by a fixed 30-day window when Claude passes the correct date_to.
+  query?: string; category?: string; date_from?: string
+  date_to?: string; is_free?: boolean; random?: boolean
+}): Promise<{ rows: any[]; promptText: string }> {
+  const today     = pacificDate(0)
   const windowEnd = input.date_to ?? pacificDate(30)
 
-  // Query events_public — already filters by confidence and is_active
   let q = supabase
     .from('events_public')
-    .select(
-      'id, name, event_category, date_type, date_start, date_end, ' +
-      'time_start, date_raw, location_name, location_address, description, ' +
-      'price_raw, is_free, age_restriction, tags, talent, sighting_count'
-    )
+    .select(CARD_COLUMNS)
     .or(
       `and(date_start.lte.${windowEnd},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),` +
       `date_type.in.(recurring,approximate,unknown)`
     )
-    // Primary: date ascending so results read chronologically.
-    // Secondary: confidence descending as a tiebreaker within the same day —
-    // better-verified events surface first when Claude reads the list top to bottom.
     .order('date_start', { ascending: true, nullsFirst: false })
     .order('confidence_score', { ascending: false })
     .limit(50)
 
-  if (input.query)              q = q.ilike('search_text', `%${input.query}%`)
-  if (input.category)           q = q.eq('event_category', input.category)
-  if (input.date_from)          q = q.gte('date_start', input.date_from)
-  if (input.date_to)            q = q.lte('date_start', input.date_to)
-  if (input.is_free === true)   q = q.eq('is_free', true)
+  if (input.query)            q = q.ilike('search_text', `%${input.query}%`)
+  if (input.category)         q = q.eq('event_category', input.category)
+  if (input.date_from)        q = q.gte('date_start', input.date_from)
+  if (input.date_to)          q = q.lte('date_start', input.date_to)
+  if (input.is_free === true) q = q.eq('is_free', true)
 
   const { data: events, error } = await q
+  if (error) { console.error('search_events error:', error); return { rows: [], promptText: 'Error searching events.' } }
+  if (!events?.length) return { rows: [], promptText: 'No events found.' }
 
-  if (error) {
-    console.error('search_events error:', error)
-    return 'Error searching events.'
-  }
-  if (!events?.length) {
-    return 'No events found matching those criteria. New events are added as contributors photograph more boards around town.'
-  }
-
-  // For random/surprise queries: shuffle and slice to a small set so Claude
-  // has genuine variety to choose from rather than always picking the same
-  // event from a consistent date-sorted list.
-  let results = events as any[]
+  let rows = events as any[]
   if (input.random) {
-    for (let i = results.length - 1; i > 0; i--) {
+    for (let i = rows.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [results[i], results[j]] = [results[j], results[i]]
+      [rows[i], rows[j]] = [rows[j], rows[i]]
     }
-    results = results.slice(0, 3)
+    rows = rows.slice(0, 3)
   }
 
-  // Fetch enrichment for all returned events in one query
-  const ids = results.map(e => e.id)
+  // Enrichment for grouping context (touring act, venue vibe) — fetched once.
+  const ids = rows.map(e => e.id)
   const { data: sightings } = await supabase
     .from('event_sightings')
     .select('event_id, enrichment_data, sighted_at')
@@ -229,59 +214,46 @@ async function executeSearch(input: {
     .not('enrichment_data', 'is', null)
     .order('sighted_at', { ascending: false })
 
-  // Most recent enrichment per event
   const enrichmentMap = new Map<string, any>()
   for (const s of sightings ?? []) {
-    if (!enrichmentMap.has(s.event_id)) {
-      enrichmentMap.set(s.event_id, s.enrichment_data)
-    }
+    if (!enrichmentMap.has(s.event_id)) enrichmentMap.set(s.event_id, s.enrichment_data)
   }
 
-  const blocks = results.map(e => formatEvent(e, enrichmentMap.get(e.id) ?? null, input.random))
-  return `Found ${results.length} event${results.length !== 1 ? 's' : ''}:\n\n${blocks.join('\n\n---\n\n')}`
+  const blocks = rows.map(e => formatForPrompt(e, enrichmentMap.get(e.id) ?? null, !!input.random))
+  return { rows, promptText: `Found ${rows.length} events:\n\n${blocks.join('\n\n---\n\n')}` }
 }
 
 // ── System prompt ──────────────────────────────────────────────────────────
-//
-// Split into a static cacheable block and a dynamic date block.
-// The static block is marked cache_control: ephemeral — Anthropic caches it
-// for 5 minutes, saving input tokens on every query after the first.
-// The date block is appended as a plain text block (not cached) so the cache
-// key for the static portion stays stable across the day.
 
-const SYSTEM_PROMPT_STATIC = `You are a helpful local events assistant for Posters Up (postersup.org), \
-an app that discovers events from physical bulletin boards around Olympia, WA. \
-Contributors photograph boards around town; AI extracts the events.
+const SYSTEM_PROMPT_STATIC = `You organize a local events feed for Posters Up (postersup.org), \
+which discovers events from physical bulletin boards around Olympia, WA.
 
-Always use the search_events tool before answering questions about events — \
-don't answer from memory. For broad questions like "what's on this weekend," \
-pass appropriate date_from/date_to filters. For specific queries, use the query field.
+Your job is to INTERPRET the query and ORGANIZE results — not to narrate them. \
+The user reads the real event cards; you only sort them into useful piles and \
+write one orienting line so they can land on what they want.
 
-When presenting events:
-- Event names in the search results are already formatted as markdown links — use them as-is; never construct your own links or link venue names, tags, or any other text
-- Write like a knowledgeable local, not a database printout
-- Weave in the enrichment context (artist bios, venue vibe) when you have it — it makes events come alive
-- Events with a "Buzz" field are showing up on multiple boards around town — mention this naturally when relevant, it's a genuine signal of local promotion
-- Never use phrases like "here's what's worth your time" or similar phrases about what our time is worth
-- Call out free events and age restrictions when relevant
-- If nothing matches, say so simply and note that new events appear as more boards are photographed
-- Keep responses tight — most users are on mobile`
+First call search_events (parse dates and filters from the query). Then call \
+present_results to group the events and write the lead line.
+
+Use the query field only for concrete words that would appear on a flyer (an act, \
+a genre, a venue). For mood, vibe, audience, or occasion queries ("fun for singles", \
+"something chill", "good for kids"), pass NO query — fetch the broad upcoming set and \
+do the matching by grouping in present_results. Substring search can't find a vibe; \
+grouping can.
+
+Grouping principles:
+- Make groups that actually help someone decide: free, all-ages, outdoor, touring acts, this weekend — whatever the result set and the query make relevant.
+- 2–4 groups. One group only if the set is truly uniform. Labels must be plain and concrete — never "Vibes", "Picks", "Highlights".
+- You don't have to place every event; leftovers appear under "More" automatically.
+- The lead line orients ("A couple of free outdoor things, plus a touring punk show"). It never says an event is good, never invents detail, never says anything is "worth your time". Any inference (touring, family-friendly) must be grounded in the event data.
+- Keep it tight — users are on mobile.`
 
 function systemPrompt() {
   return [
-    {
-      type: 'text',
-      text: SYSTEM_PROMPT_STATIC,
-      cache_control: { type: 'ephemeral' },
-    },
-    {
-      type: 'text',
-      text: `Today is ${pacificDate(0)}.`,
-    },
+    { type: 'text', text: SYSTEM_PROMPT_STATIC, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: `Today is ${pacificDate(0)}.` },
   ]
 }
-
-// ── Claude API helper ──────────────────────────────────────────────────────
 
 function claudeHeaders() {
   return {
@@ -291,132 +263,78 @@ function claudeHeaders() {
   }
 }
 
-// ── Route handler ──────────────────────────────────────────────────────────
+// ── Route ──────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  const { messages } = await req.json()
+  let query = ''
+  try { query = (await req.json()).query ?? '' } catch {}
+  if (typeof query !== 'string') return Response.json({ error: 'Bad request' }, { status: 400 })
 
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return new Response('Bad request', { status: 400 })
-  }
+  const baseMessages = [{ role: 'user', content: query || 'What is coming up?' }]
 
-  const encoder = new TextEncoder()
+  try {
+    // Step 1 — forced search_events
+    const res1 = await fetch(ANTHROPIC_API, {
+      method: 'POST', headers: claudeHeaders(),
+      body: JSON.stringify({
+        model: MODEL, max_tokens: 1024, system: systemPrompt(),
+        tools: [SEARCH_TOOL, PRESENT_TOOL],
+        tool_choice: { type: 'tool', name: 'search_events' },
+        messages: baseMessages,
+      }),
+    })
+    const msg1 = await res1.json()
+    if (!res1.ok) return Response.json({ error: 'Search failed.' }, { status: 502 })
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (payload: object) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
+    const searchCall = msg1.content?.find((b: any) => b.type === 'tool_use')
+    if (!searchCall) return Response.json({ lead: '', groups: [], events: {} })
 
-      try {
-        // ── Step 1: First call — get tool use ───────────────────────────
-        const res1 = await fetch(ANTHROPIC_API, {
-          method:  'POST',
-          headers: claudeHeaders(),
-          body:    JSON.stringify({
-            model:    MODEL,
-            max_tokens: 1024,
-            system:   systemPrompt(),
-            tools:    [SEARCH_TOOL],
-            messages,
-          }),
-        })
+    const { rows, promptText } = await executeSearch(searchCall.input)
+    if (!rows.length) return Response.json({ lead: '', groups: [], events: {} })
 
-        const msg1 = await res1.json()
-
-        if (!res1.ok) {
-          send({ error: 'Search failed. Try again.' })
-          controller.close()
-          return
-        }
-
-        // Answered without tool use — send directly and exit
-        if (msg1.stop_reason !== 'tool_use') {
-          const text = msg1.content?.find((b: any) => b.type === 'text')?.text ?? ''
-          send({ text })
-          send({ done: true })
-          controller.close()
-          return
-        }
-
-        // ── Step 2: Execute tool ─────────────────────────────────────────
-        const toolBlock  = msg1.content.find((b: any) => b.type === 'tool_use')
-        const toolResult = await executeSearch(toolBlock.input)
-
-        // ── Step 3: Second call — stream the answer ──────────────────────
-        const updatedMessages = [
-          ...messages,
+    // Step 2 — forced present_results
+    const res2 = await fetch(ANTHROPIC_API, {
+      method: 'POST', headers: claudeHeaders(),
+      body: JSON.stringify({
+        model: MODEL, max_tokens: 1024, system: systemPrompt(),
+        tools: [SEARCH_TOOL, PRESENT_TOOL],
+        tool_choice: { type: 'tool', name: 'present_results' },
+        messages: [
+          ...baseMessages,
           { role: 'assistant', content: msg1.content },
-          {
-            role:    'user',
-            content: [{
-              type:        'tool_result',
-              tool_use_id: toolBlock.id,
-              content:     toolResult,
-            }],
-          },
-        ]
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: searchCall.id, content: promptText }] },
+        ],
+      }),
+    })
+    const msg2 = await res2.json()
 
-        const res2 = await fetch(ANTHROPIC_API, {
-          method:  'POST',
-          headers: claudeHeaders(),
-          body:    JSON.stringify({
-            model:    MODEL,
-            max_tokens: 1024,
-            system:   systemPrompt(),
-            tools:    [SEARCH_TOOL],
-            stream:   true,
-            messages: updatedMessages,
+    const events: Record<string, any> = {}
+    for (const r of rows) events[r.id] = r
+    const validIds = new Set(Object.keys(events))
+
+    // Default: one untitled group of everything, if Claude's call is unusable.
+    let lead = ''
+    let groups: { label: string; event_ids: string[] }[] = []
+
+    const presentCall = res2.ok && msg2.content?.find((b: any) => b.type === 'tool_use')
+    if (presentCall?.input) {
+      lead = typeof presentCall.input.lead === 'string' ? presentCall.input.lead : ''
+      const seen = new Set<string>()
+      groups = (presentCall.input.groups ?? [])
+        .map((g: any) => ({
+          label: String(g.label ?? '').trim(),
+          // Keep only real IDs, no dupes across groups (first group wins).
+          event_ids: (g.event_ids ?? []).filter((id: string) => {
+            if (!validIds.has(id) || seen.has(id)) return false
+            seen.add(id); return true
           }),
-        })
+        }))
+        .filter((g: any) => g.label && g.event_ids.length > 0)
+    }
 
-        if (!res2.ok) {
-          send({ error: 'Something went wrong. Try again.' })
-          controller.close()
-          return
-        }
-
-        // Pipe Anthropic SSE → client SSE
-        const reader  = res2.body!.getReader()
-        const decoder = new TextDecoder()
-        let   buffer  = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() ?? ''
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue
-            const data = line.slice(6).trim()
-            if (!data) continue
-            try {
-              const event = JSON.parse(data)
-              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-                send({ text: event.delta.text })
-              }
-            } catch {}
-          }
-        }
-
-        send({ done: true })
-        controller.close()
-
-      } catch (err) {
-        console.error('search route error:', err)
-        send({ error: 'Something went wrong. Try again.' })
-        controller.close()
-      }
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type':  'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection':    'keep-alive',
-    },
-  })
+    return Response.json({ lead, groups, events })
+  } catch (err) {
+    console.error('search route error:', err)
+    return Response.json({ error: 'Something went wrong.' }, { status: 500 })
+  }
 }

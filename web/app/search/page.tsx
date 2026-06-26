@@ -6,7 +6,7 @@ import { SITE_TITLE, SITE_URL } from '@/lib/site'
 import { buildCityOptions } from '@/lib/cities'
 import { resolveLocation } from '@/lib/location'
 import { SearchPageHeader } from './search-page-header'
-import { SearchInterface } from './search-interface'
+import { SearchResults } from './search-results'
 
 export const metadata: Metadata = {
   title:       `Search · ${SITE_TITLE}`,
@@ -50,7 +50,7 @@ export default async function SearchPage({
   return (
     <div className="h-dvh bg-surface-page flex flex-col">
       <SearchPageHeader cities={availableCities} cityLabel={cityLabel} />
-      <SearchInterface />
+      <SearchResults />
     </div>
   )
 }
