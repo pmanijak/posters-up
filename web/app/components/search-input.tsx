@@ -10,13 +10,28 @@ interface Payload { lead: string; groups: Group[]; events: Record<string, any> }
 const pool = ['📌', '📌', '📌', '📋', '📌', '📌', '📋', '📌']
 const pick = () => pool[Math.floor(Math.random() * pool.length)]
 
-export function SearchInput({ eventCount = 0, initialQuery = '' }: { eventCount?: number, initialQuery?: string }) {
-  const { query, setQuery, pushParams, setHasInterpretedResults, setIsClearing } = useFilters()
+const SUGGESTIONS = [
+  "What's happening this weekend?",
+  "Nothing too loud",
+  "Something inspiring for the kids?",
+]
+
+export function SearchInput({ eventCount = 0, initialQuery = '' }: { eventCount?: number; initialQuery?: string }) {
+  const { query, setQuery, pushParams, setHasInterpretedResults } = useFilters()
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [data,   setData]   = useState<Payload | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [pins,   setPins]   = useState('')
+
+  const prevInitialQueryRef = useRef(initialQuery)
+  useEffect(() => {
+    if (prevInitialQueryRef.current !== '' && initialQuery === '') {
+      setData(null)
+      setHasInterpretedResults(false)
+    }
+    prevInitialQueryRef.current = initialQuery
+  }, [initialQuery, setHasInterpretedResults])
 
   // Auto-fire Claude when ilike comes up empty after 1 second of no typing.
   useEffect(() => {
@@ -35,15 +50,6 @@ export function SearchInput({ eventCount = 0, initialQuery = '' }: { eventCount?
     }, 300)
   }
 
-  const prevInitialQueryRef = useRef(initialQuery)
-  useEffect(() => {
-    if (prevInitialQueryRef.current !== '' && initialQuery === '') {
-      setData(null)
-      setHasInterpretedResults(false)
-    }
-    prevInitialQueryRef.current = initialQuery
-  }, [initialQuery, setHasInterpretedResults])
-
   const clearSearch = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setQuery('')
@@ -52,6 +58,8 @@ export function SearchInput({ eventCount = 0, initialQuery = '' }: { eventCount?
 
   async function runSearch(q: string) {
     if (!q.trim() || status === 'loading') return
+    setQuery(q)
+    pushParams({ q })
     setStatus('loading')
     let count = 1
     setPins(pick())
@@ -123,6 +131,23 @@ export function SearchInput({ eventCount = 0, initialQuery = '' }: { eventCount?
           Search
         </button>
       </div>
+
+      {/* Suggestion chips — visible when box is empty */}
+      {!query && !data && (
+        <div className="flex flex-wrap gap-2">
+          {SUGGESTIONS.map(s => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => runSearch(s)}
+              className="text-sm px-3 py-1.5 rounded-sm bg-surface-card border border-edge
+                         text-content-muted hover:text-content-secondary transition-colors"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Loader */}
       {status === 'loading' && (
