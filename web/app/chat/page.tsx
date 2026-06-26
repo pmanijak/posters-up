@@ -48,7 +48,7 @@ export default async function ChatPage({
   const cityLabel = (nearbyBoards ?? [])[0]?.geo_city ?? null
 
   return (
-    <div className="min-h-screen bg-surface-page flex flex-col">
+    <div className="h-dvh bg-surface-page flex flex-col">
       <ChatPageHeader cities={availableCities} cityLabel={cityLabel} />
       <ChatInterface />
     </div>
