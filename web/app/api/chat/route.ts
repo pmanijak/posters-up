@@ -289,7 +289,19 @@ export async function POST(req: NextRequest) {
     const searchCall = msg1.content?.find((b: any) => b.type === 'tool_use')
     if (!searchCall) return Response.json({ lead: '', groups: [], events: {} })
 
-    const { rows, promptText } = await executeSearch(searchCall.input)
+    const searchInput = searchCall.input
+    let { rows, promptText } = await executeSearch(searchInput)
+
+    // If Claude passed a literal query and got nothing back, it probably used a vibe
+    // phrase instead of a flyer token. Retry without the query — let present_results
+    // do the concept matching instead. All other filters (date, is_free, category) are
+    // preserved so the retry is still appropriately scoped.
+    if (!rows.length && searchInput.query) {
+      const retried = await executeSearch({ ...searchInput, query: undefined })
+      rows = retried.rows
+      promptText = retried.promptText
+    }
+
     if (!rows.length) return Response.json({ lead: '', groups: [], events: {} })
 
     // Step 2 — forced present_results
