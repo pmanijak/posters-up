@@ -21,6 +21,7 @@ export const metadata: Metadata = {
     images:      ['/og.jpg'],
   },
 }
+
 import { createClient } from '@supabase/supabase-js'
 import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'
@@ -133,11 +134,11 @@ export default async function DiscoverPage({
 
   // About card injection — only in the unfiltered default view.
   // Scans the sorted list for the first natural break: a non-specific event
-  // (recurring, approximate, unknown) or a specific event past the 7-day window.
+  // (recurring, approximate, unknown) or a specific event past the 4-day window.
   // That break point is where the About card slots in.
   // Minimum position of 3 so it never appears at the very top.
   const isFiltered = !!(q || (category && category !== 'all'))
-  let aboutAt = eventList.length // default: end of list
+  let aboutAt = eventList.length
   if (!isFiltered) {
     const MIN_POSITION = 3
     for (let i = 0; i < eventList.length; i++) {

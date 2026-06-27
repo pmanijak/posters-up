@@ -64,7 +64,10 @@ const SEARCH_TOOL = {
         type: 'string',
         description:
           'music, film, theater, dance, comedy, spoken_word, visual_art, market, ' +
-          'workshop, community, fundraiser, party, other',
+          'workshop, community, fundraiser, party, other. ' +
+          'Only set this when the user explicitly names a content type ("jazz show", ' +
+          '"film screening", "workshop"). Do NOT infer category from audience or occasion — ' +
+          '"for kids", "family", "date night" are NOT categories.',
       },
       date_from: {
         type: 'string',
@@ -319,7 +322,10 @@ export async function POST(req: NextRequest) {
       }),
     })
     const msg2 = await res2.json()
-
+    if (!res2.ok || !msg2.content) {
+      console.error('present_results failed:', JSON.stringify(msg2))
+      // Fall through — groups stays empty, leftovers render under "More"
+    }
     const events: Record<string, any> = {}
     for (const r of rows) events[r.id] = r
     const validIds = new Set(Object.keys(events))
