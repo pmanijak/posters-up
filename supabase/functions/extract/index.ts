@@ -516,17 +516,17 @@ Deno.serve(async (req) => {
         console.error("Event update error:", JSON.stringify(updateError));
       }
 
-      // Re-queue enrichment only if it would produce a different result:
-      //   - no verifications yet (previous run found nothing or was rejected)
-      //   AND
-      //   - this sighting brings a new event_url (stronger search anchor)
-      // If the event already has verifications, a correct local source was
-      // found — don't pay to re-search.
+      // Re-queue enrichment only if it would produce a different result.
+      // Passes all four signal fields so the function can decide whether
+      // any of them represent genuinely new search signal worth re-running.
       const { error: reenqueueError } = await supabase.rpc(
         "maybe_reenqueue_enrichment",
         {
-          p_event_id:      eventId,
-          p_new_event_url: item.event_url ?? null,
+          p_event_id:       eventId,
+          p_new_event_url:  item.event_url     ?? null,
+          p_new_location:   item.location_name ?? null,
+          p_new_date_start: item.date_start    ?? null,
+          p_new_description: item.description  ?? null,
         }
       );
 
@@ -573,6 +573,32 @@ Deno.serve(async (req) => {
       if (flyerError) {
         warnings.push(`Board flyer upsert failed for "${item.name}": ${flyerError.message}`);
         console.error("Board flyer upsert error:", JSON.stringify(flyerError));
+      }
+    }
+
+    // ── Talent confirmation ───────────────────────────────────────────────
+    // For matched events only: check incoming names against existing
+    // unconfirmed talent rows and flip confirmed = true on matches.
+    // Called before talent upserts so we only confirm rows that existed
+    // before this sighting, not ones we're about to create from this photo.
+    if (matchType !== 'none') {
+      const incomingTalentNames = (item.talent ?? [])
+        .map((t: any) => t.name as string)
+        .filter(Boolean);
+
+      if (incomingTalentNames.length > 0) {
+        const { error: confirmError } = await supabase.rpc(
+          'confirm_talent_from_sighting',
+          {
+            p_event_id:              eventId,
+            p_incoming_talent_names: incomingTalentNames,
+          }
+        );
+
+        if (confirmError) {
+          warnings.push(`confirm_talent_from_sighting failed for "${item.name}": ${confirmError.message}`);
+          console.error('confirm_talent_from_sighting error:', JSON.stringify(confirmError));
+        }
       }
     }
 

@@ -17,6 +17,7 @@ interface TalentEntry {
   talent_type: string | null
   role: string | null
   billing_position: number | null
+  confirmed: boolean
 }
 
 interface Event {
@@ -118,16 +119,21 @@ async function fetchTellMeMore(eventId: string): Promise<TellMeMoreData> {
 function EnrichmentSection({
   enrichment,
   accentColor,
+  confirmedTalentNames,
 }: {
   enrichment: EnrichmentData
   accentColor: string
+  confirmedTalentNames: Set<string>
 }) {
   // Narrative content: something worth reading, not just structural data.
-  // Talent only counts if at least one entry has displayable details —
-  // a name-only entry with no bio, genre, or links renders nothing.
+  // Talent only counts if at least one *confirmed* entry has displayable
+  // details — unconfirmed names may be OCR garble and must not surface links.
   const hasNarrativeContent =
     enrichment.description ||
-    enrichment.talent?.some(t => t.bio || (t.genre?.length ?? 0) > 0 || (t.links?.length ?? 0) > 0) ||
+    enrichment.talent?.some(t =>
+      confirmedTalentNames.has(t.name.toLowerCase()) &&
+      (t.bio || (t.genre?.length ?? 0) > 0 || (t.links?.length ?? 0) > 0)
+    ) ||
     enrichment.venue_context
 
   const hasAnything =
@@ -175,9 +181,13 @@ function EnrichmentSection({
         </a>
       ) : null}
 
-      {/* Per-talent context */}
+      {/* Per-talent context — bio, genre, and links gated on confirmed.
+          Unconfirmed names may be OCR variants; surfacing their links risks
+          pointing to the wrong artist entirely. Name still shows in the card
+          header via formatTalent, so nothing is lost by hiding the block. */}
       {enrichment.talent?.map((t) => {
-        const hasDetails = t.bio || (t.genre && t.genre.length > 0) || t.links.length > 0
+        const isConfirmed = confirmedTalentNames.has(t.name.toLowerCase())
+        const hasDetails = isConfirmed && (t.bio || (t.genre && t.genre.length > 0) || t.links.length > 0)
         if (!hasDetails) return null
         return (
           <div key={t.name} className="space-y-1">
@@ -265,6 +275,14 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event; de
   const accentColor = categoryColor(event.event_category)
   const talentStr   = formatTalent(event.talent ?? [])
   const location    = event.venue_name ?? event.location_name
+
+  // Build confirmed set here so EventCard controls the gate, not EnrichmentSection.
+  // Matched by lowercased name since enrichment_data keys talent by name, not ID.
+  const confirmedTalentNames = new Set(
+    (event.talent ?? [])
+      .filter(t => t.confirmed)
+      .map(t => t.name.toLowerCase())
+  )
 
   const detailParts: string[] = []
   if (event.price_raw)         detailParts.push(event.price_raw)
@@ -441,6 +459,7 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event; de
                   <EnrichmentSection
                     enrichment={data.enrichment}
                     accentColor={accentColor}
+                    confirmedTalentNames={confirmedTalentNames}
                   />
                 )}
 
