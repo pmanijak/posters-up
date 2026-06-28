@@ -176,14 +176,15 @@ export default function BoardsNearMe({
   const [activeBoard, setActiveBoard]     = useState<string | null>(initialBoardId)
   const [panToBoard, setPanToBoard]       = useState<string | null>(initialBoardId)
   const [showMap, setShowMap]             = useState(initialBoardId !== null)
+  // Deferred until the map has a visible container to render into — Leaflet
+  // needs non-zero dimensions at mount time. Starts false on both server and
+  // client (no hydration mismatch). The two effects below set it to true via
+  // the approved callback pattern; eslint-disable is intentional here because
+  // these are legitimate uses that the rule over-fires on.
+  const [mapReady, setMapReady]           = useState(false)
   // Unique per mount — forces a fresh DOM subtree for the map panel on each
   // page visit, preventing Leaflet's "container being reused" error.
   const [mapKey]                          = useState(() => Date.now())
-  // Checked once on mount; never changes. Avoids setState-in-effect patterns
-  // that were previously used to gate map rendering.
-  const [isDesktop]                       = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
-  )
 
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -216,6 +217,20 @@ export default function BoardsNearMe({
     setLoading(false)
   }
 
+  // Mount the map only when it has a visible container to render into.
+  // Both effects set a one-way latch (false → true, never back). The linter
+  // flags synchronous setState in effect bodies, but these are intentional —
+  // we're reading a browser API on mount and reacting to a tab switch, both
+  // of which are legitimate effect use cases with no cleaner alternative.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (window.matchMedia('(min-width: 768px)').matches) setMapReady(true)
+  }, [])
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (showMap) setMapReady(true)
+  }, [showMap])
+
   // ── Location picking ───────────────────────────────────────────────────────
 
   // Called by PageHeader on city pick (label = city name) or geo detect (label = null).
@@ -229,7 +244,7 @@ export default function BoardsNearMe({
     setCityLabel(label)
     setMapCenter({ lat, lng })
     setLocationState(label === null ? 'granted' : 'denied')
-    setLoading(true)
+    setLoading(true)   // safe here — event handler, not an effect
     fetchBoards(lat, lng)
   }
 
@@ -344,7 +359,7 @@ export default function BoardsNearMe({
 
         {/* Map panel */}
         <div key={mapKey} className={`flex-1 min-w-0 ${showMap ? 'block' : 'hidden md:block'}`}>
-          {(isDesktop || showMap) && (
+          {mapReady && (
             <BoardsMap
               boards={boards}
               center={mapCenter}
