@@ -5,88 +5,13 @@ import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { categoryColor } from '@/lib/categories'
-import { seenAgo, staleness } from '@/lib/dates'
+import { seenAgo, staleness, formatDate } from '@/lib/dates'
 import { sourceDomain } from '@/lib/format'
 import { hexToRgba } from '@/lib/utils/color'
+import type { EventRow, TalentEntry } from '@/lib/types/events'
 import type { TellMeMoreData, EnrichmentData } from '@/lib/types/enrichment'
 
-// ── Types ──────────────────────────────────────────────────────────────────
-
-interface TalentEntry {
-  id: string
-  name: string
-  talent_type: string | null
-  role: string | null
-  billing_position: number | null
-  confirmed: boolean
-}
-
-interface Event {
-  id: string
-  name: string
-  content_type: string
-  event_category: string | null
-  tags: string[] | null
-  flyer_style: 'minimal' | 'standard' | 'detailed' | null
-  date_type: 'specific' | 'recurring' | 'approximate' | 'unknown'
-  date_start: string | null
-  date_end: string | null
-  time_start: string | null
-  time_end: string | null
-  recurrence_rule: string | null
-  date_raw: string | null
-  location_name: string | null
-  location_address: string | null
-  description: string | null
-  contact: string | null
-  event_url: string | null
-  price_raw: string | null
-  is_free: boolean | null
-  age_restriction: string | null
-  is_outdoor: boolean | null
-  accessibility: string[] | null
-  confidence_score: number
-  sighting_count: number
-  last_sighted_at: string
-  has_enrichment: boolean
-  organization_name: string | null
-  venue_name: string | null
-  talent: TalentEntry[]
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-function formatTime(h: number, m: number): string {
-  const ampm = h >= 12 ? 'PM' : 'AM'
-  const hour = h > 12 ? h - 12 : h === 0 ? 12 : h
-  return m === 0 ? `${hour}${ampm}` : `${hour}:${String(m).padStart(2, '0')}${ampm}`
-}
-
-function formatDate(event: Event): string {
-  if (event.date_type === 'specific' && event.date_start) {
-    const [sy, sm, sd] = event.date_start.split('-').map(Number)
-    const startStr = new Date(sy, sm - 1, sd)
-      .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-      .toUpperCase()
-
-    let dateStr = startStr
-    if (event.date_end && event.date_end !== event.date_start) {
-      const [ey, em, ed] = event.date_end.split('-').map(Number)
-      const endStr = new Date(ey, em - 1, ed)
-        .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-        .toUpperCase()
-      dateStr = `${startStr} – ${endStr}`
-    }
-
-    if (event.time_start) {
-      const [h, m] = event.time_start.split(':').map(Number)
-      return `${dateStr} · ${formatTime(h, m)}`
-    }
-    return dateStr
-  }
-  if (event.date_raw) return event.date_raw.toUpperCase()
-  return 'DATE TBD'
-}
 
 function formatTalent(talent: TalentEntry[]): string | null {
   if (!talent.length) return null
@@ -254,7 +179,7 @@ function EnrichmentSection({
 
 // ── Card ───────────────────────────────────────────────────────────────────
 
-export function EventCard({ event, defaultExpanded = false }: { event: Event; defaultExpanded?: boolean }) {
+export function EventCard({ event, defaultExpanded = false }: { event: EventRow; defaultExpanded?: boolean }) {
   const searchParams = useSearchParams()
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [data, setData] = useState<TellMeMoreData | null>(null)
@@ -264,7 +189,7 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event; de
   useEffect(() => {
     if (defaultExpanded) {
       setLoading(true)
-      fetchTellMeMore(event.id).then(result => {
+      fetchTellMeMore(event.id!).then(result => {
         setData(result)
         setLoading(false)
       })
@@ -274,16 +199,25 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event; de
   const q           = searchParams.get('q') ?? ''
   const isMinimal   = event.flyer_style === 'minimal'
   const accentColor = categoryColor(event.event_category)
-  const talentStr   = formatTalent(event.talent ?? [])
+
+  // talent is Json | null in EventRow; cast once here and use talent throughout.
+  const talent      = (event.talent ?? []) as unknown as TalentEntry[]
+  const talentStr   = formatTalent(talent)
   const location    = event.venue_name ?? event.location_name
 
   // Build confirmed set here so EventCard controls the gate, not EnrichmentSection.
   // Matched by lowercased name since enrichment_data keys talent by name, not ID.
+  // confirmed is not yet in the events_public talent aggregate — see TalentEntry in
+  // lib/types/events.ts for the TODO. Until the view is updated this set is always
+  // empty, which means talent links and bios are suppressed (correct degraded behavior).
   const confirmedTalentNames = new Set(
-    (event.talent ?? [])
+    talent
       .filter(t => t.confirmed)
       .map(t => t.name.toLowerCase())
   )
+
+  // Convenience — view columns are all nullable; these are NOT NULL in the base table.
+  const sightingCount = event.sighting_count ?? 0
 
   const detailParts: string[] = []
   if (event.price_raw)         detailParts.push(event.price_raw)
@@ -313,7 +247,7 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event; de
   async function handleToggle() {
     if (!expanded && data === null) {
       setLoading(true)
-      setData(await fetchTellMeMore(event.id))
+      setData(await fetchTellMeMore(event.id!))
       setLoading(false)
     }
     setExpanded((v) => !v)
@@ -361,16 +295,10 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event; de
           </p>
         )}
 
-        {/* Description — standard/detailed only; highlight query matches */}
-        {!isMinimal && event.description && (
-          <p className="text-sm mt-2 leading-relaxed text-content-muted">
-            {highlightText(event.description, q, accentColor)}
-          </p>
-        )}
-
-        {/* Minimal: show description only if it's literally all we have */}
-        {isMinimal && event.description && !location && !talentStr && (
-          <p className="text-sm mt-1 leading-relaxed text-content-muted">
+        {/* Description — shown for standard/detailed always; for minimal only when
+            it's the only content we have (no location, no talent listed) */}
+        {event.description && (!isMinimal || (!location && !talentStr)) && (
+          <p className={`text-sm leading-relaxed text-content-muted ${isMinimal ? 'mt-1' : 'mt-2'}`}>
             {highlightText(event.description, q, accentColor)}
           </p>
         )}
@@ -420,24 +348,29 @@ export function EventCard({ event, defaultExpanded = false }: { event: Event; de
           {!defaultExpanded ? (
             <div className="flex items-center gap-3">
               <span className="text-xs text-content-muted">
-                {event.sighting_count} board{event.sighting_count !== 1 ? 's' : ''}
+                {sightingCount} board{sightingCount !== 1 ? 's' : ''}
               </span>
               <span className="text-xs font-mono text-content-muted">
-                {(event.confidence_score * 100).toFixed(0)}%
+                {((event.confidence_score ?? 0) * 100).toFixed(0)}%
               </span>
               {isMinimal && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-surface-raised text-content-muted">
                   minimal
                 </span>
               )}
-              <span className="text-xs text-content-muted">
-                {seenAgo(event.last_sighted_at)}
-              </span>
+              {event.last_sighted_at && (
+                <span className="text-xs text-content-muted">
+                  {seenAgo(event.last_sighted_at)}
+                </span>
+              )}
             </div>
           ) : (
             <div />
           )}
-          {(linkHref !== null || event.sighting_count > 0) && (
+          {/* Show the toggle when the expansion has something to offer:
+              enrichment content or board locations. The linkHref case is already
+              rendered in the card body as its own <a> — it doesn't need a toggle. */}
+          {((event.has_enrichment ?? false) || sightingCount > 0) && (
             <button
               type="button"
               onClick={handleToggle}
