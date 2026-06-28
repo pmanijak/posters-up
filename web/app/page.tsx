@@ -1,7 +1,20 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
+import { createClient } from '@supabase/supabase-js'
+import type { Database } from '@/lib/database.generated'
 
 import { SITE_TITLE, SITE_DESCRIPTION, SITE_URL } from '@/lib/site'
+import { FiltersProvider } from './components/filters-provider'
+import { FilterBar } from './components/filter-bar'
+import { SearchInput } from './components/search-input'
+import { SearchResults } from './components/search-results'
+import { EventCard } from './components/event-card'
+import { EventFeed } from './components/event-feed'
+import { AboutCard } from './components/about-card'
+import { CityPicker, type CityOption } from './components/city-picker'
+import { PageHeader } from './components/page-header'
+import { resolveLocation } from '@/lib/location'
+import { buildCityOptions } from '@/lib/cities'
 
 export const metadata: Metadata = {
   title:       SITE_TITLE,
@@ -22,20 +35,9 @@ export const metadata: Metadata = {
   },
 }
 
-import { createClient } from '@supabase/supabase-js'
-import { FiltersProvider } from './components/filters-provider'
-import { FilterBar } from './components/filter-bar'
-import { SearchInput } from './components/search-input'
-import { SearchResults } from './components/search-results'
-import { EventCard } from './components/event-card'
-import { EventFeed } from './components/event-feed'
-import { AboutCard } from './components/about-card'
-import { CityPicker, type CityOption } from './components/city-picker'
-import { PageHeader } from './components/page-header'
-import { resolveLocation } from '@/lib/location'
-import { buildCityOptions } from '@/lib/cities'
+type EventRow = Database['public']['Views']['events_public']['Row']
 
-const supabase = createClient(
+const supabase = createClient<Database>(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
 )
@@ -60,6 +62,12 @@ export default async function DiscoverPage({
   const pacificTime = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Los_Angeles',
   })
+
+  // `now` subtracts 3 hours so late-night events (e.g. a midnight show) remain
+  // visible the next morning rather than dropping off at midnight Pacific.
+  // `fourDaysOut` intentionally uses Date.now() (not `now`) — it only controls
+  // the AboutCard injection point, not DB filtering, so the 3-hour offset
+  // would just shift the card position unnecessarily.
   const now           = Date.now() - 3 * 60 * 60 * 1000
   const today         = pacificTime.format(new Date(now))
   const fourDaysOut   = pacificTime.format(new Date(Date.now() + 4  * 24 * 60 * 60 * 1000))
@@ -74,7 +82,7 @@ export default async function DiscoverPage({
   const { data: rawCities } = await supabase.rpc('available_cities')
   const availableCities: CityOption[] = buildCityOptions(rawCities ?? [])
 
-  let eventList: any[] = []
+  let eventList: EventRow[] = []
 
   if (!noBoardsNearby) {
     let query = supabase
@@ -108,13 +116,13 @@ export default async function DiscoverPage({
   }
 
   eventList = [...eventList].sort((a, b) => {
-    const pa = DATE_TYPE_PRIORITY[a.date_type] ?? 3
-    const pb = DATE_TYPE_PRIORITY[b.date_type] ?? 3
+    const pa = DATE_TYPE_PRIORITY[a.date_type ?? ''] ?? 3
+    const pb = DATE_TYPE_PRIORITY[b.date_type ?? ''] ?? 3
     if (pa !== pb) return pa - pb
 
-    const sortKey = (e: any): string | null => {
+    const sortKey = (e: EventRow): string | null => {
       if (e.date_type !== 'specific') return null
-      if (e.date_start > today) return e.date_start
+      if (e.date_start && e.date_start > today) return e.date_start
       return e.date_end ?? e.date_start
     }
 
