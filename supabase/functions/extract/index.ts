@@ -11,6 +11,66 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
+// ── Types ──────────────────────────────────────────────────────────────────
+
+type SupabaseClient = ReturnType<typeof createClient>;
+
+// Request body from the upload client.
+// photo_path and capture_date come from the upload page after EXIF extraction.
+interface RequestBody {
+  photo_path:    string;
+  lat?:          number;
+  lng?:          number;
+  capture_date?: string;
+  board_id?:     string;
+}
+
+// Shape of each item returned by the Claude extraction prompt.
+// Mirrors the extraction system prompt output schema — keep in sync.
+// Arrays (tags, accessibility, talent) should always be present per the prompt;
+// the ?? [] safety nets in the handler guard against incomplete model output.
+interface ExtractedTalent {
+  name:             string;
+  role:             string | null;
+  billing_position: number | null;
+}
+
+interface ExtractedItem {
+  name:             string;
+  content_type:     "event" | "announcement" | "resource" | "seeking" | "advocacy" | null;
+  flyer_style:      "minimal" | "standard" | "detailed" | null;
+  event_category:   string | null;
+  tags:             string[];
+  date_type:        "specific" | "recurring" | "approximate" | "unknown";
+  date_start:       string | null;  // YYYY-MM-DD
+  date_end:         string | null;
+  time_start:       string | null;  // HH:MM 24h
+  time_end:         string | null;
+  recurrence_rule:  string | null;  // RRULE string
+  date_raw:         string | null;
+  location_name:    string | null;
+  location_address: string | null;
+  description:      string | null;
+  contact:          string | null;  // public-facing URL only
+  event_url:        string | null;
+  price_raw:        string | null;
+  is_free:          boolean | null;
+  age_restriction:  string | null;
+  is_public:        boolean | null;
+  language:         string | null;  // BCP 47
+  is_outdoor:       boolean | null;
+  accessibility:    string[];
+  masks_required:   string | null;
+  rsvp_required:    boolean | null;
+  rsvp_url:         string | null;
+  organization:     string | null;
+  confidence:       number;         // 0–1; → event_sightings.extraction_confidence
+  confidence_note:  string | null;
+  talent:           ExtractedTalent[];
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
 function respond(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -52,6 +112,104 @@ async function reverseGeocodeBoard(lat: number, lng: number): Promise<{
   }
 }
 
+// Looks up an organization by canonical name, creates it if absent,
+// and bumps last_active_at on every call. Returns the id or null on error.
+async function upsertOrganization(
+  name: string,
+  supabase: SupabaseClient,
+  warnings: string[]
+): Promise<string | null> {
+  const canonical = name.toLowerCase().trim();
+
+  const { data: existing, error: lookupError } = await supabase
+    .from("organizations")
+    .select("id")
+    .eq("canonical_name", canonical)
+    .maybeSingle();
+
+  if (lookupError) {
+    warnings.push(`Org lookup failed for "${name}": ${lookupError.message}`);
+    console.error("Org lookup error:", JSON.stringify(lookupError));
+    return null;
+  }
+
+  if (existing) {
+    await supabase
+      .from("organizations")
+      .update({ last_active_at: new Date().toISOString() })
+      .eq("id", existing.id);
+    return existing.id;
+  }
+
+  const { data: newOrg, error: insertError } = await supabase
+    .from("organizations")
+    .insert({
+      name,
+      canonical_name: canonical,
+      last_active_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+
+  if (insertError) {
+    warnings.push(`Org creation failed for "${name}": ${insertError.message}`);
+    console.error("Org insert error:", JSON.stringify(insertError));
+    return null;
+  }
+
+  return newOrg?.id ?? null;
+}
+
+// Looks up a talent record by canonical name, creates it if absent,
+// and bumps last_active_at on every call. Returns the id or null on error.
+// The event_talent link is written by the caller — it carries event-specific
+// fields (role, billing_position) that belong at the call site.
+async function upsertTalent(
+  name: string,
+  supabase: SupabaseClient,
+  warnings: string[]
+): Promise<string | null> {
+  const canonical = name.toLowerCase().trim();
+
+  const { data: existing, error: lookupError } = await supabase
+    .from("talent")
+    .select("id")
+    .eq("canonical_name", canonical)
+    .maybeSingle();
+
+  if (lookupError) {
+    warnings.push(`Talent lookup failed for "${name}": ${lookupError.message}`);
+    console.error("Talent lookup error:", JSON.stringify(lookupError));
+    return null;
+  }
+
+  if (existing) {
+    await supabase
+      .from("talent")
+      .update({ last_active_at: new Date().toISOString() })
+      .eq("id", existing.id);
+    return existing.id;
+  }
+
+  const { data: newTalent, error: insertError } = await supabase
+    .from("talent")
+    .insert({
+      name,
+      canonical_name: canonical,
+      last_active_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+
+  if (insertError) {
+    warnings.push(`Talent creation failed for "${name}": ${insertError.message}`);
+    console.error("Talent insert error:", JSON.stringify(insertError));
+    return null;
+  }
+
+  return newTalent?.id ?? null;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -76,9 +234,9 @@ Deno.serve(async (req) => {
   if (authError || !user) return respond({ error: "Unauthorized" }, 401);
 
   // ── Parse request ─────────────────────────────────────────────────────────
-  let body: any;
+  let body: RequestBody;
   try {
-    body = await req.json();
+    body = await req.json() as RequestBody;
   } catch {
     return respond({ error: "Invalid JSON body" }, 400);
   }
@@ -281,9 +439,9 @@ Deno.serve(async (req) => {
   const claudeData = await claudeRes.json();
   const rawText = claudeData.content?.[0]?.text ?? "";
 
-  let extractedItems: any[];
+  let extractedItems: ExtractedItem[];
   try {
-    extractedItems = JSON.parse(rawText);
+    extractedItems = JSON.parse(rawText) as ExtractedItem[];
     if (!Array.isArray(extractedItems)) throw new Error("Response was not a JSON array");
   } catch (parseErr: any) {
     console.error("Claude response parse failed. Raw text:", rawText.slice(0, 500));
@@ -354,8 +512,8 @@ Deno.serve(async (req) => {
     // anchor signal — a stable identity even when the AI names the event
     // differently across extractions of the same flyer.
     const topAct: string | null =
-      item.talent?.find((t: any) => t.billing_position === 1)?.name
-      ?? item.talent?.[0]?.name
+      item.talent.find(t => t.billing_position === 1)?.name
+      ?? item.talent[0]?.name
       ?? null;
 
     const { data: match, error: matchError } = await supabase.rpc("find_event_match", {
@@ -377,43 +535,9 @@ Deno.serve(async (req) => {
     }
 
     // ── Organization lookup / create ──────────────────────────────────────
-    let organizationId: string | null = null;
-    if (item.organization) {
-      const canonical = item.organization.toLowerCase().trim();
-      const { data: existingOrg, error: orgLookupError } = await supabase
-        .from("organizations")
-        .select("id")
-        .eq("canonical_name", canonical)
-        .maybeSingle();
-
-      if (orgLookupError) {
-        warnings.push(`Org lookup failed for "${item.organization}": ${orgLookupError.message}`);
-        console.error("Org lookup error:", JSON.stringify(orgLookupError));
-      } else if (existingOrg) {
-        organizationId = existingOrg.id;
-        await supabase
-          .from("organizations")
-          .update({ last_active_at: new Date().toISOString() })
-          .eq("id", organizationId);
-      } else {
-        const { data: newOrg, error: orgInsertError } = await supabase
-          .from("organizations")
-          .insert({
-            name: item.organization,
-            canonical_name: canonical,
-            last_active_at: new Date().toISOString(),
-          })
-          .select("id")
-          .single();
-
-        if (orgInsertError) {
-          warnings.push(`Org creation failed for "${item.organization}": ${orgInsertError.message}`);
-          console.error("Org insert error:", JSON.stringify(orgInsertError));
-        } else {
-          organizationId = newOrg?.id ?? null;
-        }
-      }
-    }
+    const organizationId: string | null = item.organization
+      ? await upsertOrganization(item.organization, supabase, warnings)
+      : null;
 
     // ── Create or update event ────────────────────────────────────────────
     if (!eventId) {
@@ -522,11 +646,11 @@ Deno.serve(async (req) => {
       const { error: reenqueueError } = await supabase.rpc(
         "maybe_reenqueue_enrichment",
         {
-          p_event_id:       eventId,
-          p_new_event_url:  item.event_url     ?? null,
-          p_new_location:   item.location_name ?? null,
-          p_new_date_start: item.date_start    ?? null,
-          p_new_description: item.description  ?? null,
+          p_event_id:        eventId,
+          p_new_event_url:   item.event_url     ?? null,
+          p_new_location:    item.location_name ?? null,
+          p_new_date_start:  item.date_start    ?? null,
+          p_new_description: item.description   ?? null,
         }
       );
 
@@ -581,14 +705,14 @@ Deno.serve(async (req) => {
     // unconfirmed talent rows and flip confirmed = true on matches.
     // Called before talent upserts so we only confirm rows that existed
     // before this sighting, not ones we're about to create from this photo.
-    if (matchType !== 'none') {
-      const incomingTalentNames = (item.talent ?? [])
-        .map((t: any) => t.name as string)
-        .filter(Boolean);
+    if (matchType !== "none") {
+      const incomingTalentNames = item.talent
+        .map(t => t.name)
+        .filter(name => name.length > 0);
 
       if (incomingTalentNames.length > 0) {
         const { error: confirmError } = await supabase.rpc(
-          'confirm_talent_from_sighting',
+          "confirm_talent_from_sighting",
           {
             p_event_id:              eventId,
             p_incoming_talent_names: incomingTalentNames,
@@ -597,77 +721,38 @@ Deno.serve(async (req) => {
 
         if (confirmError) {
           warnings.push(`confirm_talent_from_sighting failed for "${item.name}": ${confirmError.message}`);
-          console.error('confirm_talent_from_sighting error:', JSON.stringify(confirmError));
+          console.error("confirm_talent_from_sighting error:", JSON.stringify(confirmError));
         }
       }
     }
 
     // ── Talent ────────────────────────────────────────────────────────────
-    for (const t of item.talent ?? []) {
+    for (const t of item.talent) {
       if (!t.name) continue;
-      const canonical = t.name.toLowerCase().trim();
 
-      const { data: existingTalent, error: talentLookupError } = await supabase
-        .from("talent")
-        .select("id")
-        .eq("canonical_name", canonical)
-        .maybeSingle();
+      const talentId = await upsertTalent(t.name, supabase, warnings);
+      if (!talentId) continue;
 
-      if (talentLookupError) {
-        warnings.push(`Talent lookup failed for "${t.name}": ${talentLookupError.message}`);
-        console.error("Talent lookup error:", JSON.stringify(talentLookupError));
-        continue;
-      }
+      const { error: linkError } = await supabase.from("event_talent").upsert(
+        {
+          event_id: eventId,
+          talent_id: talentId,
+          role: t.role ?? null,
+          billing_position: t.billing_position ?? null,
+        },
+        { onConflict: "event_id,talent_id" },
+      );
 
-      let talentId: string | null = null;
-      if (existingTalent) {
-        talentId = existingTalent.id;
-        await supabase
-          .from("talent")
-          .update({ last_active_at: new Date().toISOString() })
-          .eq("id", talentId);
-      } else {
-        const { data: newTalent, error: talentInsertError } = await supabase
-          .from("talent")
-          .insert({
-            name: t.name,
-            canonical_name: canonical,
-            last_active_at: new Date().toISOString(),
-          })
-          .select("id")
-          .single();
-
-        if (talentInsertError) {
-          warnings.push(`Talent creation failed for "${t.name}": ${talentInsertError.message}`);
-          console.error("Talent insert error:", JSON.stringify(talentInsertError));
-          continue;
-        }
-
-        talentId = newTalent?.id ?? null;
-      }
-
-      if (talentId) {
-        const { error: linkError } = await supabase.from("event_talent").upsert(
-          {
-            event_id: eventId,
-            talent_id: talentId,
-            role: t.role ?? null,
-            billing_position: t.billing_position ?? null,
-          },
-          { onConflict: "event_id,talent_id" },
-        );
-
-        if (linkError) {
-          warnings.push(`event_talent link failed for "${t.name}" on "${item.name}": ${linkError.message}`);
-          console.error("event_talent upsert error:", JSON.stringify(linkError));
-        }
+      if (linkError) {
+        warnings.push(`event_talent link failed for "${t.name}" on "${item.name}": ${linkError.message}`);
+        console.error("event_talent upsert error:", JSON.stringify(linkError));
       }
     }
 
     results.push({ event_id: eventId, name: item.name, match_type: matchType });
     } catch (err: any) {
-      console.error(`Unhandled error processing item "${item.name ?? '(unnamed)'}":`, err);
-      skipped.push({ name: item.name ?? '(unnamed)', reason: `Unhandled error: ${err?.message ?? err}` });
+      console.error(`Unhandled error processing item "${item.name ?? "(unnamed)"}":`, err);
+      skipped.push({ name: item.name ?? "(unnamed)", reason: `Unhandled error: ${err?.message ?? err}` });
     }
   }
 
