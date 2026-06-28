@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
+import type { Database } from '@/lib/database.generated'
 import { createClient } from '@/lib/supabase'
 import { categoryColor } from '@/lib/categories'
 import { seenAgo, staleness } from '@/lib/dates'
@@ -17,31 +18,26 @@ const BoardsMap = dynamic(() => import('./boards-map'), { ssr: false })
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export interface BoardRow {
-  id: string
-  location_name: string | null
-  description: string | null
-  managed_by: string | null
-  requires_entry_to_photograph: boolean | null
-  requires_entry_to_post: boolean | null
-  last_sighted_at: string
-  active_flyer_count: number
-  popular_tags: string[] | null
-  primary_category: string | null
+// Base shape from generated types. Note: the generator omits | null on fields
+// that are nullable in the underlying boards table — the null-coalescing in
+// BoardCard is intentional and correct despite what the type says.
+// content_categories was added in a later migration and isn't in the generated
+// type yet; intersect it here until the next `supabase gen types` run.
+type BoardRowBase = Database['public']['Functions']['boards_near_detail']['Returns'][number]
+
+export type BoardRow = BoardRowBase & {
   // Distinct event_category values across active flyers on this board.
   // Requires content_categories column in boards_near_detail RPC — see migration.
   content_categories: string[] | null
-  distance_m: number
-  relevance_score: number
-  board_lat: number
-  board_lng: number
 }
 
 // 'granted'     = current location came from geolocation (shows "your location")
 // 'denied'      = geo denied, or user picked a named city
 // 'unavailable' = navigator.geolocation absent
-// 'requesting'  = initial; resolves in the mount effect
-type LocationState = 'requesting' | 'granted' | 'denied' | 'unavailable'
+type LocationState = 'granted' | 'denied' | 'unavailable'
+
+// Stable across renders — no component-level deps.
+const supabase = createClient()
 
 // ── Board card ─────────────────────────────────────────────────────────────
 
@@ -165,14 +161,14 @@ export default function BoardsNearMe({
   fallbackLat:      number
   fallbackLng:      number
   initialCityLabel: string | null
-  initialBoardId:  string | null
+  initialBoardId:   string | null
   cities:           CityOption[]
 }) {
   const router = useRouter()
 
   const [boards, setBoards]               = useState<BoardRow[]>([])
   const [loading, setLoading]             = useState(true)
-  const [locationState, setLocationState] = useState<LocationState>('requesting')
+  const [locationState, setLocationState] = useState<LocationState>('denied')
   const [cityLabel, setCityLabel]         = useState<string | null>(initialCityLabel)
   const [mapCenter, setMapCenter]         = useState({ lat: fallbackLat, lng: fallbackLng })
   // If arriving from an event card "Map →" link, pre-activate that board
@@ -180,18 +176,37 @@ export default function BoardsNearMe({
   const [activeBoard, setActiveBoard]     = useState<string | null>(initialBoardId)
   const [panToBoard, setPanToBoard]       = useState<string | null>(initialBoardId)
   const [showMap, setShowMap]             = useState(initialBoardId !== null)
-  const [mapReady, setMapReady]           = useState(false)
   // Unique per mount — forces a fresh DOM subtree for the map panel on each
   // page visit, preventing Leaflet's "container being reused" error.
   const [mapKey]                          = useState(() => Date.now())
+  // Checked once on mount; never changes. Avoids setState-in-effect patterns
+  // that were previously used to gate map rendering.
+  const [isDesktop]                       = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
+  )
 
-  const listRef  = useRef<HTMLDivElement>(null)
-  const supabase = createClient()
+  const listRef = useRef<HTMLDivElement>(null)
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
+  // Mount fetch — uses .then() so setState is in a callback, not in the
+  // synchronous effect body. The linter flags any function containing setState
+  // called synchronously in an effect, even if the setState itself is after
+  // an await. Inlining with .then() is the approved pattern.
+  useEffect(() => {
+    let cancelled = false
+    supabase
+      .rpc('boards_near_detail', { lat: fallbackLat, lng: fallbackLng, radius_m: 10000 })
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (!error && data) setBoards(data as BoardRow[])
+        setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [fallbackLat, fallbackLng])
+
+  // Used only in handleCityPick (an event handler) where async setState is fine.
   async function fetchBoards(lat: number, lng: number) {
-    setLoading(true)
     const { data, error } = await supabase.rpc('boards_near_detail', {
       lat,
       lng,
@@ -200,21 +215,6 @@ export default function BoardsNearMe({
     if (!error && data) setBoards(data as BoardRow[])
     setLoading(false)
   }
-
-  // On mount: use fallback coords, same as the events page.
-  // Location is opt-in via "📍 Use my location" in the city picker — not requested automatically.
-  useEffect(() => {
-    setLocationState('denied')
-    fetchBoards(fallbackLat, fallbackLng)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Mount the map only when it has a visible container to render into.
-  useEffect(() => {
-    if (window.matchMedia('(min-width: 768px)').matches) setMapReady(true)
-  }, [])
-  useEffect(() => {
-    if (showMap) setMapReady(true)
-  }, [showMap])
 
   // ── Location picking ───────────────────────────────────────────────────────
 
@@ -229,6 +229,7 @@ export default function BoardsNearMe({
     setCityLabel(label)
     setMapCenter({ lat, lng })
     setLocationState(label === null ? 'granted' : 'denied')
+    setLoading(true)
     fetchBoards(lat, lng)
   }
 
@@ -343,7 +344,7 @@ export default function BoardsNearMe({
 
         {/* Map panel */}
         <div key={mapKey} className={`flex-1 min-w-0 ${showMap ? 'block' : 'hidden md:block'}`}>
-          {mapReady && (
+          {(isDesktop || showMap) && (
             <BoardsMap
               boards={boards}
               center={mapCenter}
