@@ -8,15 +8,9 @@ interface FilterBarProps {
 }
 
 export function FilterBar({ activeCategory }: FilterBarProps) {
-  const { setQuery, pushParams, clearResults } = useFilters()
+  const { setQuery, pushParams } = useFilters()
 
   const handleCategory = (value: string) => {
-    // A category tap is a deliberate switch back to browsing — leave any active
-    // AI search. Without this, the new category filters the (hidden) EventFeed
-    // while SearchResults still owns the surface: the pill looks active but
-    // nothing visibly changes.
-    clearResults()
-
     setQuery('')                              // clear the search input locally
     if (value === 'all') {
       pushParams({ category: null, q: null })   // clear both from the URL

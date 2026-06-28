@@ -40,7 +40,6 @@ export function SearchInput({ eventCount = 0 }: { eventCount?: number }) {
   const clearSearch = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setQuery('')
-    clearResults()
     pushParams({ q: null })
   }
 

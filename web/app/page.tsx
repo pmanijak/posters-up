@@ -160,7 +160,7 @@ export default async function DiscoverPage({
         isDetected={location.source !== 'cookie'}
       />
 
-      <Suspense fallback={null}>
+      <Suspense fallback={<FallbackState/>}>
         <FiltersProvider initialQuery={q}>
 
           <div className="sticky top-0 z-10 bg-surface-page">
@@ -233,6 +233,16 @@ function NoBoardsState() {
       >
         Submit a photo
       </a>
+    </div>
+  )
+}
+
+function FallbackState() {
+  return (
+    <div className="text-center py-16">
+        <p className="text-sm text-content-muted">
+          ...
+        </p>
     </div>
   )
 }
