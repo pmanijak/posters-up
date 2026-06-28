@@ -16,14 +16,24 @@ export function SearchInput({ eventCount = 0 }: { eventCount?: number }) {
     searchData, searchStatus,
     runSearch, clearResults,
   } = useFilters()
+
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Always points to the latest runSearch without being a dep.
+  // runSearch is intentionally not useCallback in FiltersProvider (closes over
+  // fresh searchStatus), so it's a new reference every render — adding it as
+  // a dep would re-fire the effect on every keystroke.
+  const runSearchRef = useRef(runSearch)
+  useEffect(() => {
+    runSearchRef.current = runSearch
+  })
+  
   // Auto-fire Claude when ilike comes up empty after 1 second of no typing.
   useEffect(() => {
     if (!query.trim() || eventCount > 0 || searchStatus === 'loading' || searchData) return
-    const id = setTimeout(() => runSearch(query), 1000)
+    const id = setTimeout(() => runSearchRef.current(query), 1000)
     return () => clearTimeout(id)
-  }, [query, eventCount])
+  }, [query, eventCount, searchStatus, searchData])
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
@@ -37,7 +47,7 @@ export function SearchInput({ eventCount = 0 }: { eventCount?: number }) {
       pushParams({ q: val || null })
     }, 300)
   }
-  
+
   const clearSearch = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setQuery('')
@@ -76,7 +86,7 @@ export function SearchInput({ eventCount = 0 }: { eventCount?: number }) {
         )}
       </div>
 
-{/* Vibe examples — quiet caption hugging the input, not a control row.
+      {/* Vibe examples — quiet caption hugging the input, not a control row.
           text-xs does the "helper text" job; color stays full content-muted
           (no opacity dimming) so the links read as tappable on the dark page.
           Plain underlined links signal "type something like this", distinct
