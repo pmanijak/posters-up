@@ -132,7 +132,7 @@ export function FiltersProvider({
       setSearchData(payload)
       setHasInterpretedResults(true)
       setSearchStatus('idle')
-    } catch (err) {
+    } catch {
       clearInterval(id)
       if (controller.signal.aborted) return   // abort throws — swallow it silently
       setPins('')
