@@ -27,13 +27,16 @@ export function SearchInput({ eventCount = 0 }: { eventCount?: number }) {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
     setQuery(val)
-    if (searchData) clearResults()
+    // Any edit invalidates an active OR in-flight interpreted search — the query
+    // it ran for is now stale. clearResults() aborts the request so a late
+    // resolution can't pop results back in over the ilike filter.
+    if (searchData || searchStatus === 'loading') clearResults()
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       pushParams({ q: val || null })
     }, 300)
   }
-
+  
   const clearSearch = () => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     setQuery('')
