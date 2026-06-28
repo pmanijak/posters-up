@@ -5,8 +5,9 @@ import { useFilters } from './filters-provider'
 
 const SUGGESTIONS = [
   "What's happening this weekend",
-  "Nothing too loud",
-  "Something inspiring for the kids",
+  "Date night",
+  "Something chill",
+  "Inspiring for the kids",
 ]
 
 export function SearchInput({ eventCount = 0 }: { eventCount?: number }) {
