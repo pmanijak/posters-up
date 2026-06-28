@@ -4,9 +4,10 @@ import { useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { categoryColor, hexToRgba } from '@/lib/categories'
+import { categoryColor } from '@/lib/categories'
 import { seenAgo, staleness } from '@/lib/dates'
 import { sourceDomain } from '@/lib/format'
+import { hexToRgba } from '@/lib/utils/color'
 import type { TellMeMoreData, EnrichmentData } from '@/lib/types/enrichment'
 
 // ── Types ──────────────────────────────────────────────────────────────────

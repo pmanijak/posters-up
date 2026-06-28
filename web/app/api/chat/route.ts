@@ -13,24 +13,56 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest } from 'next/server'
+import type { Database } from '@/lib/database.generated'
+import { CATEGORY_MAP } from '@/lib/categories'
+import {
+  type EventRow, type TalentEntry,
+  type EnrichmentData, type SearchInput, type Group,
+} from '@/lib/types/events'
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages'
 const MODEL         = 'claude-haiku-4-5-20251001'
 
-const supabase = createClient(
+const supabase = createClient<Database>(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_TELL_ME_MORE_KEY!
 )
 
-// Full card shape — must match the EventCard `Event` interface so cards render
-// identically to the home feed. Pulled from events_public (same view the feed uses).
-const CARD_COLUMNS =
-  'id, name, content_type, event_category, tags, flyer_style, date_type, ' +
-  'date_start, date_end, time_start, time_end, recurrence_rule, date_raw, ' +
-  'location_name, location_address, description, contact, event_url, ' +
-  'price_raw, is_free, age_restriction, is_outdoor, accessibility, ' +
-  'confidence_score, sighting_count, last_sighted_at, has_enrichment, ' +
-  'organization_name, venue_name, talent'
+// Derived from CATEGORY_MAP — updates automatically when categories change.
+const EVENT_CATEGORY_VALUES = Object.keys(CATEGORY_MAP).join(', ')
+
+// ── Anthropic API types ────────────────────────────────────────────────────
+
+interface AnthropicContentBlock {
+  type: string
+  name?: string
+  [key: string]: unknown
+}
+
+// Per-tool input shapes. input is typed specifically so no casts are needed
+// at the call sites. groups stays unknown — validated at runtime by normalizeGroups.
+interface PresentResultsInput {
+  lead: string
+  groups: unknown
+}
+
+interface SearchEventsBlock extends AnthropicContentBlock {
+  type: 'tool_use'
+  name: 'search_events'
+  id: string
+  input: SearchInput
+}
+
+interface PresentResultsBlock extends AnthropicContentBlock {
+  type: 'tool_use'
+  name: 'present_results'
+  id: string
+  input: PresentResultsInput
+}
+
+interface AnthropicResponse {
+  content?: AnthropicContentBlock[]
+}
 
 // ── Date helpers ───────────────────────────────────────────────────────────
 
@@ -63,8 +95,7 @@ const SEARCH_TOOL = {
       category: {
         type: 'string',
         description:
-          'music, film, theater, dance, comedy, spoken_word, visual_art, market, ' +
-          'workshop, community, fundraiser, party, other. ' +
+          `${EVENT_CATEGORY_VALUES}. ` +
           'Only set this when the user explicitly names a content type ("jazz show", ' +
           '"film screening", "workshop"). Do NOT infer category from audience or occasion — ' +
           '"for kids", "family", "date night" are NOT categories.',
@@ -132,100 +163,6 @@ const PRESENT_TOOL = {
   },
 }
 
-// ── Tool execution ─────────────────────────────────────────────────────────
-// Returns the full rows (for the client to render as cards) plus a compact
-// text block (for Claude to reason over and group by ID).
-
-function formatForPrompt(e: any, enrichment: any, random: boolean): string {
-  const lines: string[] = [`ID: ${e.id}`, `Name: ${e.name}`]
-
-  if (e.event_category) lines.push(`Category: ${e.event_category}`)
-
-  if (e.date_type === 'specific' && e.date_start) {
-    const [y, m, d] = e.date_start.split('-').map(Number)
-    lines.push(`Date: ${new Date(y, m - 1, d).toLocaleDateString('en-US', {
-      weekday: 'long', month: 'long', day: 'numeric',
-    })}`)
-  } else if (e.date_raw) {
-    lines.push(`Date: ${e.date_raw}`)
-  } else if (e.date_type === 'recurring') {
-    lines.push('Recurring event')
-  }
-
-  if (e.location_name) lines.push(`Location: ${e.location_name}`)
-  if (e.talent?.length) lines.push(`Featuring: ${e.talent.map((t: any) => t.name).join(', ')}`)
-  if (e.price_raw)    lines.push(`Price: ${e.price_raw}`)
-  else if (e.is_free) lines.push('Price: Free')
-  if (e.age_restriction) lines.push(`Ages: ${e.age_restriction}`)
-  if (e.is_outdoor === true) lines.push('Outdoor')
-  if (e.description) lines.push(`Description: ${e.description}`)
-  if (enrichment?.description) lines.push(`Context: ${enrichment.description}`)
-  if (enrichment?.venue_context) lines.push(`Venue: ${enrichment.venue_context}`)
-  if (e.tags?.length) lines.push(`Tags: ${e.tags.join(', ')}`)
-
-  // Buzz: suppressed for random queries so surprise picks don't bias to promoted.
-  if (!random && e.sighting_count >= 3) {
-    lines.push(`Buzz: on ${e.sighting_count} boards around town`)
-  }
-
-  return lines.join('\n')
-}
-
-async function executeSearch(input: {
-  query?: string; category?: string; date_from?: string
-  date_to?: string; is_free?: boolean; random?: boolean
-}): Promise<{ rows: any[]; promptText: string }> {
-  const today     = pacificDate(0)
-  const windowEnd = input.date_to ?? pacificDate(30)
-
-  let q = supabase
-    .from('events_public')
-    .select(CARD_COLUMNS)
-    .or(
-      `and(date_start.lte.${windowEnd},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),` +
-      `date_type.in.(recurring,approximate,unknown)`
-    )
-    .order('date_start', { ascending: true, nullsFirst: false })
-    .order('confidence_score', { ascending: false })
-    .limit(50)
-
-  if (input.query)            q = q.ilike('search_text', `%${input.query}%`)
-  if (input.category)         q = q.eq('event_category', input.category)
-  if (input.date_from)        q = q.gte('date_start', input.date_from)
-  if (input.date_to)          q = q.lte('date_start', input.date_to)
-  if (input.is_free === true) q = q.eq('is_free', true)
-
-  const { data: events, error } = await q
-  if (error) { console.error('search_events error:', error); return { rows: [], promptText: 'Error searching events.' } }
-  if (!events?.length) return { rows: [], promptText: 'No events found.' }
-
-  let rows = events as any[]
-  if (input.random) {
-    for (let i = rows.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [rows[i], rows[j]] = [rows[j], rows[i]]
-    }
-    rows = rows.slice(0, 3)
-  }
-
-  // Enrichment for grouping context (touring act, venue vibe) — fetched once.
-  const ids = rows.map(e => e.id)
-  const { data: sightings } = await supabase
-    .from('event_sightings')
-    .select('event_id, enrichment_data, sighted_at')
-    .in('event_id', ids)
-    .not('enrichment_data', 'is', null)
-    .order('sighted_at', { ascending: false })
-
-  const enrichmentMap = new Map<string, any>()
-  for (const s of sightings ?? []) {
-    if (!enrichmentMap.has(s.event_id)) enrichmentMap.set(s.event_id, s.enrichment_data)
-  }
-
-  const blocks = rows.map(e => formatForPrompt(e, enrichmentMap.get(e.id) ?? null, !!input.random))
-  return { rows, promptText: `Found ${rows.length} events:\n\n${blocks.join('\n\n---\n\n')}` }
-}
-
 // ── System prompt ──────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT_STATIC = `You organize a local events feed for Posters Up (postersup.org), \
@@ -258,12 +195,158 @@ function systemPrompt() {
   ]
 }
 
+// ── Anthropic client ───────────────────────────────────────────────────────
+
 function claudeHeaders() {
   return {
     'Content-Type':      'application/json',
     'x-api-key':         process.env.ANTHROPIC_CHAT_API_KEY!,
     'anthropic-version': '2023-06-01',
   }
+}
+
+async function callClaude(
+  toolName: string,
+  messages: unknown[],
+  system: ReturnType<typeof systemPrompt>
+): Promise<{ ok: boolean; msg: AnthropicResponse }> {
+  const res = await fetch(ANTHROPIC_API, {
+    method: 'POST',
+    headers: claudeHeaders(),
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 1024,
+      system,
+      tools: [SEARCH_TOOL, PRESENT_TOOL],
+      tool_choice: { type: 'tool', name: toolName },
+      messages,
+    }),
+  })
+  return { ok: res.ok, msg: await res.json() }
+}
+
+// ── Tool execution ─────────────────────────────────────────────────────────
+// Returns the full rows (for the client to render as cards) plus a compact
+// text block (for Claude to reason over and group by ID).
+
+function shuffle<T>(arr: T[]): T[] {
+  const result = [...arr]
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[result[i], result[j]] = [result[j], result[i]]
+  }
+  return result
+}
+
+function formatForPrompt(e: EventRow, enrichment: EnrichmentData | null, random: boolean): string {
+  // id and name are non-null at runtime; nullable in the type because Postgres
+  // can't infer NOT NULL through views.
+  const lines: string[] = [`ID: ${e.id ?? ''}`, `Name: ${e.name ?? ''}`]
+
+  if (e.event_category) lines.push(`Category: ${e.event_category}`)
+
+  if (e.date_type === 'specific' && e.date_start) {
+    const [y, m, d] = e.date_start.split('-').map(Number)
+    lines.push(`Date: ${new Date(y, m - 1, d).toLocaleDateString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric',
+    })}`)
+  } else if (e.date_raw) {
+    lines.push(`Date: ${e.date_raw}`)
+  } else if (e.date_type === 'recurring') {
+    lines.push('Recurring event')
+  }
+
+  if (e.location_name) lines.push(`Location: ${e.location_name}`)
+
+  // talent is Json | null in the generated type (JSONB aggregate); cast to known shape.
+  const talents = Array.isArray(e.talent) ? e.talent as unknown as TalentEntry[] : []
+  if (talents.length) lines.push(`Featuring: ${talents.map(t => t.name).join(', ')}`)
+
+  if (e.price_raw)    lines.push(`Price: ${e.price_raw}`)
+  else if (e.is_free) lines.push('Price: Free')
+  if (e.age_restriction) lines.push(`Ages: ${e.age_restriction}`)
+  if (e.is_outdoor === true) lines.push('Outdoor')
+  if (e.description) lines.push(`Description: ${e.description}`)
+  if (enrichment?.description) lines.push(`Context: ${enrichment.description}`)
+  if (enrichment?.venue_context) lines.push(`Venue: ${enrichment.venue_context}`)
+  if (e.tags?.length) lines.push(`Tags: ${e.tags.join(', ')}`)
+
+  // Buzz: suppressed for random queries so surprise picks don't bias to promoted.
+  if (!random && (e.sighting_count ?? 0) >= 3) {
+    lines.push(`Buzz: on ${e.sighting_count} boards around town`)
+  }
+
+  return lines.join('\n')
+}
+
+async function executeSearch(input: SearchInput): Promise<{ rows: EventRow[]; promptText: string }> {
+  const today     = pacificDate(0)
+  const windowEnd = input.date_to ?? pacificDate(30)
+
+  let q = supabase
+    .from('events_public')
+    .select('*')
+    .or(
+      `and(date_start.lte.${windowEnd},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),` +
+      `date_type.in.(recurring,approximate,unknown)`
+    )
+    .order('date_start', { ascending: true, nullsFirst: false })
+    .order('confidence_score', { ascending: false })
+    .limit(50)
+
+  if (input.query)            q = q.ilike('search_text', `%${input.query}%`)
+  if (input.category)         q = q.eq('event_category', input.category)
+  if (input.date_from)        q = q.gte('date_start', input.date_from)
+  if (input.date_to)          q = q.lte('date_start', input.date_to)
+  if (input.is_free === true) q = q.eq('is_free', true)
+
+  const { data: events, error } = await q
+  if (error) { console.error('search_events error:', error); return { rows: [], promptText: 'Error searching events.' } }
+  if (!events?.length) return { rows: [], promptText: 'No events found.' }
+
+  let rows: EventRow[] = events
+  if (input.random) {
+    rows = shuffle(rows).slice(0, 3)
+  }
+
+  // Enrichment for grouping context (touring act, venue vibe) — fetched once.
+  const ids = rows.map(e => e.id).filter(Boolean) as string[]
+  const { data: sightings } = await supabase
+    .from('event_sightings')
+    .select('event_id, enrichment_data, sighted_at')
+    .in('event_id', ids)
+    .not('enrichment_data', 'is', null)
+    .order('sighted_at', { ascending: false })
+
+  const enrichmentMap = new Map<string, EnrichmentData>()
+  for (const s of sightings ?? []) {
+    if (!enrichmentMap.has(s.event_id)) enrichmentMap.set(s.event_id, s.enrichment_data as unknown as EnrichmentData)
+  }
+
+  const blocks = rows.map(e => formatForPrompt(e, enrichmentMap.get(e.id ?? '') ?? null, !!input.random))
+  return { rows, promptText: `Found ${rows.length} events:\n\n${blocks.join('\n\n---\n\n')}` }
+}
+
+// ── Group normalization ────────────────────────────────────────────────────
+// Validates and deduplicates Claude's present_results output. IDs not in
+// validIds are dropped (hallucinations); first group wins on duplicates.
+
+function normalizeGroups(rawGroups: unknown, validIds: Set<string>): Group[] {
+  if (!Array.isArray(rawGroups)) return []
+  const seen = new Set<string>()
+  return rawGroups
+    .map((g: unknown) => {
+      const group = g as Record<string, unknown>
+      return {
+        label: String(group.label ?? '').trim(),
+        // Keep only real IDs, no dupes across groups (first group wins).
+        event_ids: (Array.isArray(group.event_ids) ? group.event_ids : []).filter((id: unknown) => {
+          if (typeof id !== 'string' || !validIds.has(id) || seen.has(id)) return false
+          seen.add(id); return true
+        }),
+      }
+    })
+    .filter((g): g is Group => Boolean(g.label) && g.event_ids.length > 0)
 }
 
 // ── Route ──────────────────────────────────────────────────────────────────
@@ -273,23 +356,15 @@ export async function POST(req: NextRequest) {
   try { query = (await req.json()).query ?? '' } catch {}
   if (typeof query !== 'string') return Response.json({ error: 'Bad request' }, { status: 400 })
 
+  const system       = systemPrompt()  // compute once per request
   const baseMessages = [{ role: 'user', content: query || 'What is coming up?' }]
 
   try {
     // Step 1 — forced search_events
-    const res1 = await fetch(ANTHROPIC_API, {
-      method: 'POST', headers: claudeHeaders(),
-      body: JSON.stringify({
-        model: MODEL, max_tokens: 1024, system: systemPrompt(),
-        tools: [SEARCH_TOOL, PRESENT_TOOL],
-        tool_choice: { type: 'tool', name: 'search_events' },
-        messages: baseMessages,
-      }),
-    })
-    const msg1 = await res1.json()
-    if (!res1.ok) return Response.json({ error: 'Search failed.' }, { status: 502 })
+    const { ok: ok1, msg: msg1 } = await callClaude('search_events', baseMessages, system)
+    if (!ok1) return Response.json({ error: 'Search failed.' }, { status: 502 })
 
-    const searchCall = msg1.content?.find((b: any) => b.type === 'tool_use')
+    const searchCall = msg1.content?.find((b): b is SearchEventsBlock => b.type === 'tool_use' && b.name === 'search_events')
     if (!searchCall) return Response.json({ lead: '', groups: [], events: {} })
 
     const searchInput = searchCall.input
@@ -300,54 +375,38 @@ export async function POST(req: NextRequest) {
     // do the concept matching instead. All other filters (date, is_free, category) are
     // preserved so the retry is still appropriately scoped.
     if (!rows.length && searchInput.query) {
-      const retried = await executeSearch({ ...searchInput, query: undefined })
-      rows = retried.rows
-      promptText = retried.promptText
+      ;({ rows, promptText } = await executeSearch({ ...searchInput, query: undefined }))
     }
 
     if (!rows.length) return Response.json({ lead: '', groups: [], events: {} })
 
     // Step 2 — forced present_results
-    const res2 = await fetch(ANTHROPIC_API, {
-      method: 'POST', headers: claudeHeaders(),
-      body: JSON.stringify({
-        model: MODEL, max_tokens: 1024, system: systemPrompt(),
-        tools: [SEARCH_TOOL, PRESENT_TOOL],
-        tool_choice: { type: 'tool', name: 'present_results' },
-        messages: [
-          ...baseMessages,
-          { role: 'assistant', content: msg1.content },
-          { role: 'user', content: [{ type: 'tool_result', tool_use_id: searchCall.id, content: promptText }] },
-        ],
-      }),
-    })
-    const msg2 = await res2.json()
-    if (!res2.ok || !msg2.content) {
+    const { ok: ok2, msg: msg2 } = await callClaude('present_results', [
+      ...baseMessages,
+      { role: 'assistant', content: msg1.content },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: searchCall.id, content: promptText }] },
+    ], system)
+    if (!ok2 || !msg2.content) {
       console.error('present_results failed:', JSON.stringify(msg2))
       // Fall through — groups stays empty, leftovers render under "More"
     }
-    const events: Record<string, any> = {}
-    for (const r of rows) events[r.id] = r
+
+    const events: Record<string, EventRow> = {}
+    for (const r of rows) {
+      if (r.id) events[r.id] = r
+    }
     const validIds = new Set(Object.keys(events))
 
-    // Default: one untitled group of everything, if Claude's call is unusable.
-    let lead = ''
-    let groups: { label: string; event_ids: string[] }[] = []
+    // Default: empty groups — leftovers render under "More" automatically.
+    let lead   = ''
+    let groups: Group[] = []
 
-    const presentCall = res2.ok && msg2.content?.find((b: any) => b.type === 'tool_use')
-    if (presentCall?.input) {
-      lead = typeof presentCall.input.lead === 'string' ? presentCall.input.lead : ''
-      const seen = new Set<string>()
-      groups = (presentCall.input.groups ?? [])
-        .map((g: any) => ({
-          label: String(g.label ?? '').trim(),
-          // Keep only real IDs, no dupes across groups (first group wins).
-          event_ids: (g.event_ids ?? []).filter((id: string) => {
-            if (!validIds.has(id) || seen.has(id)) return false
-            seen.add(id); return true
-          }),
-        }))
-        .filter((g: any) => g.label && g.event_ids.length > 0)
+    const presentCall = ok2
+      ? msg2.content?.find((b): b is PresentResultsBlock => b.type === 'tool_use' && b.name === 'present_results')
+      : undefined
+    if (presentCall) {
+      lead   = presentCall.input.lead
+      groups = normalizeGroups(presentCall.input.groups, validIds)
     }
 
     return Response.json({ lead, groups, events })

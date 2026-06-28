@@ -1,6 +1,7 @@
 'use client'
 // app/components/filter-bar.tsx
-import { CATEGORIES, categoryColor, hexToRgba } from '@/lib/categories'
+import { CATEGORIES, categoryColor } from '@/lib/categories'
+import { hexToRgba } from '@/lib/utils/color'
 import { useFilters } from './filters-provider'
 
 interface FilterBarProps {
