@@ -48,6 +48,7 @@ export function FiltersProvider({
   const [searchData,   setSearchData]   = useState<Payload | null>(null)
   const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'error'>('idle')
   const [pins,         setPins]         = useState('')
+  const searchAbortRef = useRef<AbortController | null>(null)
 
   // Sync query from the SSR-provided initialQuery when it changes.
   useEffect(() => {
@@ -65,8 +66,7 @@ export function FiltersProvider({
   useEffect(() => {
     const incoming = initialQuery ?? ''
     if (prevInitialQuery.current !== '' && incoming === '') {
-      setSearchData(null)
-      setHasInterpretedResults(false)
+      clearResults()
     }
     prevInitialQuery.current = incoming
   }, [initialQuery])
@@ -84,6 +84,8 @@ export function FiltersProvider({
   }, [router, searchParams])
 
   function clearResults() {
+    searchAbortRef.current?.abort()
+    searchAbortRef.current = null
     setSearchData(null)
     setSearchStatus('idle')
     setPins('')
@@ -97,6 +99,13 @@ export function FiltersProvider({
     setQuery(q)
     pushParams({ q })
     setSearchStatus('loading')
+
+    // Cancel any prior in-flight search and track this one so clearResults()
+    // (or a newer search) can abort it before its async resolution writes state.
+    searchAbortRef.current?.abort()
+    const controller = new AbortController()
+    searchAbortRef.current = controller
+
     let count = 1
     setPins(pick())
     const id = setInterval(() => {
@@ -109,16 +118,19 @@ export function FiltersProvider({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q }),
+        signal: controller.signal,
       })
       const payload = await res.json()
       clearInterval(id)
+      if (controller.signal.aborted) return   // cleared mid-flight — drop the result
       setPins('')
       if (!res.ok || payload.error) { setSearchStatus('error'); return }
       setSearchData(payload)
       setHasInterpretedResults(true)
       setSearchStatus('idle')
-    } catch {
+    } catch (err) {
       clearInterval(id)
+      if (controller.signal.aborted) return   // abort throws — swallow it silently
       setPins('')
       setSearchStatus('error')
     }
