@@ -1,9 +1,13 @@
 'use client'
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import type { Group, EventRow } from '@/lib/types/events'
 
-export interface Group { label: string; event_ids: string[] }
-export interface Payload { lead: string; groups: Group[]; events: Record<string, any> }
+export interface Payload {
+  lead:   string
+  groups: Group[]
+  events: Record<string, EventRow>
+}
 
 const pool = ['📌', '📌', '📌', '📋', '📌', '📌', '📋', '📌']
 const pick = () => pool[Math.floor(Math.random() * pool.length)]
@@ -59,6 +63,15 @@ export function FiltersProvider({
     }
   }, [initialQuery])
 
+  const clearResults = useCallback(() => {
+    searchAbortRef.current?.abort()
+    searchAbortRef.current = null
+    setSearchData(null)
+    setSearchStatus('idle')
+    setPins('')
+    setHasInterpretedResults(false)
+  }, [])
+
   // When the URL query clears (non-empty → empty), drop interpreted results.
   // Keyed off initialQuery (the SSR re-render landing), not a timeout, to avoid
   // a flash of stale Claude results before the normal feed comes back.
@@ -69,7 +82,7 @@ export function FiltersProvider({
       clearResults()
     }
     prevInitialQuery.current = incoming
-  }, [initialQuery])
+  }, [initialQuery, clearResults])
 
   const pushParams = useCallback((updates: Record<string, string | null>) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -82,15 +95,6 @@ export function FiltersProvider({
     }
     router.replace(`?${params.toString()}`, { scroll: false })
   }, [router, searchParams])
-
-  function clearResults() {
-    searchAbortRef.current?.abort()
-    searchAbortRef.current = null
-    setSearchData(null)
-    setSearchStatus('idle')
-    setPins('')
-    setHasInterpretedResults(false)
-  }
 
   // Defined inline (not useCallback) so it always closes over fresh state —
   // matches the original SearchInput behavior where re-renders recreated it.
