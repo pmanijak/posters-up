@@ -163,16 +163,16 @@ export default async function DiscoverPage({
       <Suspense fallback={null}>
         <FiltersProvider initialQuery={q}>
 
-          {/* Search input — promoted above the category bar; owns the feed surface
-              when a search is active */}
-          <div className="max-w-2xl mx-auto px-4 my-3">
-            <SearchInput eventCount={eventList.length} />
-          </div>
-
           <div className="sticky top-0 z-10 bg-surface-page">
-            <div className="max-w-2xl mx-auto px-4 pt-2 pb-3">
+            <div className="max-w-2xl mx-auto px-4 pt-2 pb-4">
               <FilterBar activeCategory={category} />
             </div>
+          </div>
+
+          {/* Search input — promoted above the category bar; owns the feed surface
+              when a search is active */}
+          <div className="max-w-2xl mx-auto px-4 pb-4">
+            <SearchInput eventCount={eventList.length} />
           </div>
 
           <main className="max-w-2xl mx-auto px-4">

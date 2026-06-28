@@ -97,7 +97,7 @@ export function FiltersProvider({
   async function runSearch(q: string) {
     if (!q.trim() || searchStatus === 'loading') return
     setQuery(q)
-    pushParams({ q })
+    pushParams({ q, category: null })   // vibe search exits any category filter
     setSearchStatus('loading')
 
     // Cancel any prior in-flight search and track this one so clearResults()
