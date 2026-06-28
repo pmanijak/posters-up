@@ -26,6 +26,7 @@ import { createClient } from '@supabase/supabase-js'
 import { FiltersProvider } from './components/filters-provider'
 import { FilterBar } from './components/filter-bar'
 import { SearchInput } from './components/search-input'
+import { SearchResults } from './components/search-results'
 import { EventCard } from './components/event-card'
 import { EventFeed } from './components/event-feed'
 import { AboutCard } from './components/about-card'
@@ -162,6 +163,12 @@ export default async function DiscoverPage({
       <Suspense fallback={null}>
         <FiltersProvider initialQuery={q}>
 
+          {/* Search input — promoted above the category bar; owns the feed surface
+              when a search is active */}
+          <div className="max-w-2xl mx-auto px-4 my-3">
+            <SearchInput eventCount={eventList.length} />
+          </div>
+
           <div className="sticky top-0 z-10 bg-surface-page">
             <div className="max-w-2xl mx-auto px-4 pt-2 pb-3">
               <FilterBar activeCategory={category} />
@@ -169,10 +176,6 @@ export default async function DiscoverPage({
           </div>
 
           <main className="max-w-2xl mx-auto px-4">
-            <div className="my-3">
-              <SearchInput eventCount={eventList.length} initialQuery={q} />
-            </div>
-
             {noBoardsNearby ? (
               availableCities.length > 0 ? (
                 <CityPicker cities={availableCities} />
@@ -180,26 +183,32 @@ export default async function DiscoverPage({
                 <NoBoardsState />
               )
             ) : (
-              <EventFeed>
-                {eventList.length === 0 ? (
-                  <EmptyState category={category} q={q} />
-                ) : (
-                  <div className="space-y-3">
-                    {eventList.flatMap((event, i) => {
-                      const cards = []
-                      if (!isFiltered && i === aboutAt) cards.push(<AboutCard key="__about" />)
-                      cards.push(<EventCard key={event.id} event={event} />)
-                      return cards
-                    })}
-                    {!isFiltered && aboutAt >= eventList.length && <AboutCard key="__about" />}
-                    <p className="text-center text-xs pt-4 text-content-muted">
-                      {eventList.length} event{eventList.length !== 1 ? 's' : ''}
-                      {!q && category && category !== 'all' ? ` · ${category}` : ''}
-                      {q ? ` · "${q}"` : ''}
-                    </p>
-                  </div>
-                )}
-              </EventFeed>
+              <>
+                {/* Interpreted results render here, in the feed surface.
+                    Self-gates to null when there's no active search. */}
+                <SearchResults />
+
+                <EventFeed>
+                  {eventList.length === 0 ? (
+                    <EmptyState category={category} q={q} />
+                  ) : (
+                    <div className="space-y-3">
+                      {eventList.flatMap((event, i) => {
+                        const cards = []
+                        if (!isFiltered && i === aboutAt) cards.push(<AboutCard key="__about" />)
+                        cards.push(<EventCard key={event.id} event={event} />)
+                        return cards
+                      })}
+                      {!isFiltered && aboutAt >= eventList.length && <AboutCard key="__about" />}
+                      <p className="text-center text-xs pt-4 text-content-muted">
+                        {eventList.length} event{eventList.length !== 1 ? 's' : ''}
+                        {!q && category && category !== 'all' ? ` · ${category}` : ''}
+                        {q ? ` · "${q}"` : ''}
+                      </p>
+                    </div>
+                  )}
+                </EventFeed>
+              </>
             )}
           </main>
         </FiltersProvider>

@@ -2,12 +2,26 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
+export interface Group { label: string; event_ids: string[] }
+export interface Payload { lead: string; groups: Group[]; events: Record<string, any> }
+
+const pool = ['📌', '📌', '📌', '📋', '📌', '📌', '📋', '📌']
+const pick = () => pool[Math.floor(Math.random() * pool.length)]
+
 type FiltersCtx = {
   query: string
   setQuery: (v: string) => void
   pushParams: (updates: Record<string, string | null>) => void
   hasInterpretedResults: boolean
   setHasInterpretedResults: (v: boolean) => void
+
+  // interpreted-search state, lifted out of SearchInput so results can render
+  // in the feed surface while the input lives at the top of the page
+  searchData: Payload | null
+  searchStatus: 'idle' | 'loading' | 'error'
+  pins: string
+  runSearch: (q: string) => void
+  clearResults: () => void
 }
 
 const FiltersContext = createContext<FiltersCtx | null>(null)
@@ -31,12 +45,30 @@ export function FiltersProvider({
   const [hasInterpretedResults, setHasInterpretedResults] = useState(false)
   const lastPushedQuery = useRef(initialQuery ?? '')
 
+  const [searchData,   setSearchData]   = useState<Payload | null>(null)
+  const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [pins,         setPins]         = useState('')
+
+  // Sync query from the SSR-provided initialQuery when it changes.
   useEffect(() => {
     const incoming = initialQuery ?? ''
     if (incoming !== lastPushedQuery.current) {
       setQuery(incoming)
       lastPushedQuery.current = incoming
     }
+  }, [initialQuery])
+
+  // When the URL query clears (non-empty → empty), drop interpreted results.
+  // Keyed off initialQuery (the SSR re-render landing), not a timeout, to avoid
+  // a flash of stale Claude results before the normal feed comes back.
+  const prevInitialQuery = useRef(initialQuery ?? '')
+  useEffect(() => {
+    const incoming = initialQuery ?? ''
+    if (prevInitialQuery.current !== '' && incoming === '') {
+      setSearchData(null)
+      setHasInterpretedResults(false)
+    }
+    prevInitialQuery.current = incoming
   }, [initialQuery])
 
   const pushParams = useCallback((updates: Record<string, string | null>) => {
@@ -51,11 +83,54 @@ export function FiltersProvider({
     router.replace(`?${params.toString()}`, { scroll: false })
   }, [router, searchParams])
 
+  function clearResults() {
+    setSearchData(null)
+    setSearchStatus('idle')
+    setPins('')
+    setHasInterpretedResults(false)
+  }
+
+  // Defined inline (not useCallback) so it always closes over fresh state —
+  // matches the original SearchInput behavior where re-renders recreated it.
+  async function runSearch(q: string) {
+    if (!q.trim() || searchStatus === 'loading') return
+    setQuery(q)
+    pushParams({ q })
+    setSearchStatus('loading')
+    let count = 1
+    setPins(pick())
+    const id = setInterval(() => {
+      count += 1
+      if (count > 20) return
+      setPins(p => p + ' ' + pick())
+    }, 1000)
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q }),
+      })
+      const payload = await res.json()
+      clearInterval(id)
+      setPins('')
+      if (!res.ok || payload.error) { setSearchStatus('error'); return }
+      setSearchData(payload)
+      setHasInterpretedResults(true)
+      setSearchStatus('idle')
+    } catch {
+      clearInterval(id)
+      setPins('')
+      setSearchStatus('error')
+    }
+  }
+
   return (
     <FiltersContext.Provider value={{
       query, setQuery,
       pushParams,
       hasInterpretedResults, setHasInterpretedResults,
+      searchData, searchStatus, pins,
+      runSearch, clearResults,
     }}>
       {children}
     </FiltersContext.Provider>
