@@ -183,12 +183,15 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
   const searchParams = useSearchParams()
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [data, setData] = useState<TellMeMoreData | null>(null)
-  const [loading, setLoading] = useState(false)
+  // When defaultExpanded, loading starts true so the card opens in a loading
+  // state without needing setLoading(true) inside the effect.
+  const [loading, setLoading] = useState(defaultExpanded)
 
-  // Auto-fetch on mount when starting in expanded state (e.g. dedicated event page)
+  // Auto-fetch on mount when starting in expanded state (e.g. dedicated event page).
+  // setLoading(true) is deliberately absent — loading is initialized to defaultExpanded
+  // above to avoid synchronous setState in the effect body.
   useEffect(() => {
     if (defaultExpanded) {
-      setLoading(true)
       fetchTellMeMore(event.id!).then(result => {
         setData(result)
         setLoading(false)
