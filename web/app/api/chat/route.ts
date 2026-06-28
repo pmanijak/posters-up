@@ -17,8 +17,9 @@ import type { Database } from '@/lib/database.generated'
 import { CATEGORY_MAP } from '@/lib/categories'
 import {
   type EventRow, type TalentEntry,
-  type EnrichmentData, type SearchInput, type Group,
+  type SearchInput, type Group,
 } from '@/lib/types/events'
+import { type EnrichmentData } from '@/lib/types/enrichment'
 
 const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages'
 const MODEL         = 'claude-haiku-4-5-20251001'
