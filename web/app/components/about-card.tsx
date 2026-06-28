@@ -18,8 +18,8 @@ export function AboutCard() {
           It turns out, we can.
         </p>
         <p className="text-sm leading-relaxed text-content-secondary">
-          I made it so anybody can add photos, so even if you're not in Olympia,
-          it should work for you if you have lots of posters in your neighborhood.
+          Anybody can add photos, so even if you're not in Olympia,
+          it can work for you if you have lots of posters in your neighborhood.
         </p>
 
         <div className="pt-0.5">
