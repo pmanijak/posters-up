@@ -218,6 +218,8 @@ For minimal flyers, note if null fields appear intentional rather than
 unreadable (e.g. "no address — likely withheld by design").
 
 OUTPUT FORMAT
+Return a JSON array containing one object per extracted item:
+[
 {
   "name": "title",
   "content_type": "event | announcement | resource | seeking | advocacy",
@@ -256,4 +258,11 @@ OUTPUT FORMAT
   "rsvp_url": "URL or null",
   "confidence": 0.0,
   "confidence_note": "explanation if confidence below 0.80, else null"
-}`;
+  }
+]
+
+If the board is empty or nothing is extractable, return an empty array: []
+
+Your entire response must be the JSON array and nothing else.
+No text before it. No summary after it. No markdown fences.
+Start with [ and end with ].`;

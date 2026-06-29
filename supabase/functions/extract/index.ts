@@ -78,6 +78,20 @@ function respond(body: unknown, status = 200) {
   });
 }
 
+// Claude occasionally writes prose before the JSON array despite instructions.
+// Try three strategies in order:
+//   1. JSON inside a markdown code fence (anywhere in the response)
+//   2. The outermost [ ... ] array in the response
+//   3. The raw text as-is (let JSON.parse produce a useful error)
+function extractJson(text: string): string {
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (fenceMatch) return fenceMatch[1].trim();
+  const start = text.indexOf("[");
+  const end   = text.lastIndexOf("]");
+  if (start !== -1 && end > start) return text.slice(start, end + 1);
+  return text.trim();
+}
+
 // Reverse geocodes a board location at street level (zoom=17).
 // Populates both the human-readable description ("4th Ave E, Olympia")
 // and the city/region/country cache used by the enrich function.
@@ -441,7 +455,7 @@ Deno.serve(async (req) => {
 
   let extractedItems: ExtractedItem[];
   try {
-    extractedItems = JSON.parse(rawText) as ExtractedItem[];
+    extractedItems = JSON.parse(extractJson(rawText)) as ExtractedItem[];
     if (!Array.isArray(extractedItems)) throw new Error("Response was not a JSON array");
   } catch (parseErr: any) {
     console.error("Claude response parse failed. Raw text:", rawText.slice(0, 500));
