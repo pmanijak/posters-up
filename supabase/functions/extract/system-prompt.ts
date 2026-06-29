@@ -217,6 +217,32 @@ Include confidence_note whenever confidence is below 0.80.
 For minimal flyers, note if null fields appear intentional rather than
 unreadable (e.g. "no address — likely withheld by design").
 
+FIELD CONFIDENCE                                          ← ADD FROM HERE
+Score the three fields used for event matching independently.
+These drive deduplication — a low score on any field tells the
+pipeline to treat that field as unreliable and fall back to other signals.
+
+  "name":     readability of the event title / headline act names
+  "date":     readability of the date (day, month, year digits)
+  "location": readability of the venue name or address
+
+Use the same 0.0–1.0 scale as the overall confidence score.
+Score a field low when that specific region is affected by:
+  - physical damage: tear, water stain, fold, tape covering text
+  - occlusion: another flyer or object overlaps that field
+  - low contrast in that region of the image only
+  - handwritten text that is only partially legible
+  - stylized or decorative font that required significant interpretation
+
+A flyer that is mostly clean but has a torn corner obscuring the date
+should score name: 0.95, date: 0.20, location: 0.85 — not uniformly
+low overall. The overall confidence reflects the gestalt; field_confidence
+tells the pipeline what it can actually rely on per field.
+
+Overall confidence and field confidence are independent. A single bad
+region does not lower the overall score unless the extraction as a
+whole was compromised.
+
 OUTPUT FORMAT
 Return a JSON array containing one object per extracted item:
 [
@@ -256,6 +282,11 @@ Return a JSON array containing one object per extracted item:
   "masks_required": "required | recommended | optional | not_required | null",
   "rsvp_required": true | false | null,
   "rsvp_url": "URL or null",
+  "field_confidence": {
+    "name": 0.0,
+    "date": 0.0,
+    "location": 0.0
+  },
   "confidence": 0.0,
   "confidence_note": "explanation if confidence below 0.80, else null"
   }

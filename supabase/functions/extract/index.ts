@@ -66,6 +66,11 @@ interface ExtractedItem {
   organization:     string | null;
   confidence:       number;         // 0–1; → event_sightings.extraction_confidence
   confidence_note:  string | null;
+  field_confidence: {               // per-field readability scores for dedup decisions
+    name:     number;
+    date:     number;
+    location: number;
+  } | null;
   talent:           ExtractedTalent[];
 }
 
@@ -531,13 +536,14 @@ Deno.serve(async (req) => {
       ?? null;
 
     const { data: match, error: matchError } = await supabase.rpc("find_event_match", {
-      p_name:          item.name,
-      p_date_start:    item.date_start ?? null,
-      p_location_name: item.location_name ?? null,
-      p_board_lat:     lat ?? null,
-      p_board_lng:     lng ?? null,
-      p_event_url:     item.event_url ?? null,
-      p_talent_name:   topAct,
+      p_name:            item.name,
+      p_date_start:      item.date_start ?? null,
+      p_location_name:   item.location_name ?? null,
+      p_board_lat:       lat ?? null,
+      p_board_lng:       lng ?? null,
+      p_event_url:       item.event_url ?? null,
+      p_talent_name:     topAct,
+      p_date_confidence: item.field_confidence?.date ?? null,
     });
 
     if (matchError) {
