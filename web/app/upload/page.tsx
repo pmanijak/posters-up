@@ -2,19 +2,54 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
+import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase'
 import exifr from 'exifr'
 
+// ── Types ──────────────────────────────────────────────────────────────────
+
+interface ExtractionEvent {
+  event_id:   string
+  name:       string
+  match_type?: string
+}
+
+interface ExtractionResult {
+  success:          boolean
+  photo_id:         string | null
+  board_id:         string | null
+  events_extracted: number
+  events_skipped:   number
+  events:           ExtractionEvent[]
+  skipped?:         Array<{ name: string; reason: string }>
+  warnings?:        string[]
+}
+
+// ── Supabase client ────────────────────────────────────────────────────────
+
+// Stable across renders — no component-level deps.
+const supabase = createClient()
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
 async function resizeImage(file: File, maxDimension = 2400): Promise<Blob> {
   const bitmap = await createImageBitmap(file)
-  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height))
+  const scale  = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height))
   const canvas = document.createElement('canvas')
-  canvas.width = bitmap.width * scale
-  canvas.height = bitmap.height * scale
+  canvas.width  = Math.round(bitmap.width  * scale)
+  canvas.height = Math.round(bitmap.height * scale)
   const ctx = canvas.getContext('2d')!
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-  return new Promise(resolve => canvas.toBlob(resolve as any, 'image/jpeg', 0.85))
+  return new Promise((resolve, reject) =>
+    canvas.toBlob(
+      blob => blob ? resolve(blob) : reject(new Error('Canvas toBlob failed')),
+      'image/jpeg',
+      0.85
+    )
+  )
 }
+
+// ── useProgress ────────────────────────────────────────────────────────────
 
 // Advances linearly from 0 to 95 over 75 seconds.
 // Jumps to 100 when the caller invokes the returned complete() function.
@@ -24,7 +59,9 @@ function useProgress(active: boolean) {
 
   useEffect(() => {
     if (active) {
-      setProgress(0)
+      // progress is already 0 — reset() is called before setUploading(true)
+      // in the upload handler, so setProgress(0) here would be redundant
+      // and would trigger the set-state-in-effect lint rule.
       const duration = 100_000
       const target   = 95
       const tick     = 250
@@ -63,61 +100,64 @@ function useProgress(active: boolean) {
   return { progress, complete, reset }
 }
 
-export default function UploadPage() {
-  const supabase = createClient()
+// ── Component ──────────────────────────────────────────────────────────────
 
+export default function UploadPage() {
   // Auth
-  const [user, setUser]         = useState<any>(null)
-  const [loading, setLoading]   = useState(true)
-  const [step, setStep]         = useState<'email' | 'code'>('email')
-  const [email, setEmail]       = useState('')
-  const [code, setCode]         = useState('')
+  const [user, setUser]             = useState<User | null>(null)
+  const [loading, setLoading]       = useState(true)
+  const [step, setStep]             = useState<'email' | 'code'>('email')
+  const [email, setEmail]           = useState('')
+  const [code, setCode]             = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError]       = useState<string | null>(null)
+  const [error, setError]           = useState<string | null>(null)
 
   // Upload
-  const [uploading, setUploading] = useState(false)
-  const [results, setResults]     = useState<any>(null)
-  const [showRaw, setShowRaw]     = useState(false)
+  const [uploading, setUploading]             = useState(false)
+  const [results, setResults]                 = useState<ExtractionResult | null>(null)
+  const [showRaw, setShowRaw]                 = useState(false)
 
   // Board details submission
-  const [locationName, setLocationName]                                 = useState('')
-  const [description, setDescription]                                   = useState('')
-  const [requiresEntryToPhotograph, setRequiresEntryToPhotograph]       = useState<boolean | null>(null)
-  const [requiresEntryToPost, setRequiresEntryToPost]                   = useState<boolean | null>(null)
-  const [submittingBoard, setSubmittingBoard]                           = useState(false)
-  const [boardSubmitted, setBoardSubmitted]                             = useState(false)
-  const [boardError, setBoardError]                                     = useState<string | null>(null)
+  const [locationName, setLocationName]                               = useState('')
+  const [description, setDescription]                                 = useState('')
+  const [requiresEntryToPhotograph, setRequiresEntryToPhotograph]     = useState<boolean | null>(null)
+  const [requiresEntryToPost, setRequiresEntryToPost]                 = useState<boolean | null>(null)
+  const [submittingBoard, setSubmittingBoard]                         = useState(false)
+  const [boardSubmitted, setBoardSubmitted]                           = useState(false)
+  const [boardError, setBoardError]                                   = useState<string | null>(null)
 
   const { progress, complete, reset } = useProgress(uploading)
 
+  // Auth check on mount. supabase is module-level so no dep needed.
+  // setState calls are in .then() — satisfies react-hooks/set-state-in-effect.
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) setUser(data.user)
       setLoading(false)
     })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
-  // When a board_id comes back, fetch its existing values to pre-populate.
+  // When a board_id comes back, fetch its existing values to pre-populate
+  // the board details form and reset submission state.
+  // All setState calls are in .then() to satisfy react-hooks/set-state-in-effect.
   useEffect(() => {
     if (!results?.board_id) return
-    setBoardSubmitted(false)
-    setBoardError(null)
-    setRequiresEntryToPhotograph(null)
-    setRequiresEntryToPost(null)
-
     supabase
       .from('boards')
       .select('location_name, description')
       .eq('id', results.board_id)
       .maybeSingle()
       .then(({ data }) => {
+        setBoardSubmitted(false)
+        setBoardError(null)
+        setRequiresEntryToPhotograph(null)
+        setRequiresEntryToPost(null)
         setLocationName(data?.location_name ?? '')
         setDescription(data?.description ?? '')
       })
   }, [results?.board_id])
 
-  // Send a 8-digit OTP to their email.
+  // Send an 8-digit OTP to their email.
   async function sendOtp() {
     setSubmitting(true)
     setError(null)
@@ -146,9 +186,7 @@ export default function UploadPage() {
       setSubmitting(false)
       return
     }
-    if (data.user) {
-      setUser(data.user)
-    }
+    if (data.user) setUser(data.user)
     setSubmitting(false)
   }
 
@@ -156,10 +194,10 @@ export default function UploadPage() {
     const file = e.target.files?.[0]
     if (!file || !user) return
 
-    setUploading(true)
+    reset()           // reset progress before setUploading so the effect
+    setUploading(true) // body doesn't need to call setProgress(0)
     setError(null)
     setResults(null)
-    reset()
 
     try {
       const [gps, exifData] = await Promise.all([
@@ -167,7 +205,7 @@ export default function UploadPage() {
         exifr.parse(file, ['DateTimeOriginal']).catch(() => null),
       ])
 
-      const lat          = gps?.latitude ?? null
+      const lat          = gps?.latitude  ?? null
       const lng          = gps?.longitude ?? null
       const capture_date = exifData?.DateTimeOriginal
         ? new Date(exifData.DateTimeOriginal).toISOString()
@@ -190,18 +228,18 @@ export default function UploadPage() {
           method: 'POST',
           headers: {
             'Content-Type':  'application/json',
-            'Authorization': `Bearer ${session?.access_token}`
+            'Authorization': `Bearer ${session?.access_token}`,
           },
-          body: JSON.stringify({ photo_path: path, lat, lng, capture_date })
+          body: JSON.stringify({ photo_path: path, lat, lng, capture_date }),
         }
       )
 
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Extraction failed')
       complete()
-      setResults(data)
-    } catch (err: any) {
-      setError(err.message)
+      setResults(data as ExtractionResult)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setUploading(false)
     }
@@ -229,11 +267,8 @@ export default function UploadPage() {
 
     setSubmittingBoard(false)
 
-    if (error) {
-      setBoardError(error.message)
-    } else {
-      setBoardSubmitted(true)
-    }
+    if (error) setBoardError(error.message)
+    else setBoardSubmitted(true)
   }
 
   const boardDetailsReady =
@@ -268,7 +303,6 @@ export default function UploadPage() {
       <div className="flex justify-center px-4 pt-16">
         <div className="w-full max-w-sm space-y-4">
 
-          {/* Email OTP */}
           {step === 'email' ? (
             <div className="space-y-3">
               <input
@@ -416,17 +450,17 @@ export default function UploadPage() {
               }
             </div>
 
-            {results.warnings?.length > 0 && (
+            {results.warnings && results.warnings.length > 0 && (
               <div className="px-4 py-3 space-y-1">
-                {results.warnings.map((w: string, i: number) => (
+                {results.warnings.map((w, i) => (
                   <p key={i} className="text-xs text-amber-400">⚠ {w}</p>
                 ))}
               </div>
             )}
 
-            {results.events?.length > 0 && (
+            {results.events.length > 0 && (
               <div className="px-4 py-3 space-y-1">
-                {results.events.map((e: any, i: number) => (
+                {results.events.map((e: ExtractionEvent, i: number) => (
                   <div key={i} className="flex items-center justify-between gap-4">
                     <span className="text-sm text-content-secondary truncate">{e.name}</span>
                     <span className="text-xs text-content-muted shrink-0">{e.match_type ?? 'new'}</span>
