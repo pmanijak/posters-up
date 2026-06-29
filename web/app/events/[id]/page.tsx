@@ -2,18 +2,22 @@ import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { Suspense, cache } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import type { Database } from '@/lib/database.generated'
 import Link from 'next/link'
 import { EventCard } from '@/app/components/event-card'
 import { PageHeader } from '@/app/components/page-header'
 import { SITE_TITLE, SITE_URL } from '@/lib/site'
+import type { TalentEntry } from '@/lib/types/events'
 
-const supabase = createClient(
+type EventRow = Database['public']['Views']['events_public']['Row']
+
+const supabase = createClient<Database>(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY!
 )
 
 // cache() deduplicates the fetch between generateMetadata and the page component
-const getEvent = cache(async (id: string) => {
+const getEvent = cache(async (id: string): Promise<EventRow | null> => {
   const { data, error } = await supabase
     .from('events_public')
     .select('*')
@@ -23,7 +27,7 @@ const getEvent = cache(async (id: string) => {
   return data
 })
 
-function buildMetaDescription(event: any): string {
+function buildMetaDescription(event: EventRow): string {
   const parts: string[] = []
 
   if (event.date_type === 'specific' && event.date_start) {
@@ -39,8 +43,10 @@ function buildMetaDescription(event: any): string {
   const location = event.venue_name ?? event.location_name
   if (location) parts.push(location)
 
-  if (event.talent?.length) {
-    parts.push(event.talent.map((t: any) => t.name).join(', '))
+  // talent is Json | null in EventRow (JSONB aggregate); cast to known shape.
+  const talents = Array.isArray(event.talent) ? event.talent as unknown as TalentEntry[] : []
+  if (talents.length) {
+    parts.push(talents.map(t => t.name).join(', '))
   }
 
   const details: string[] = []
