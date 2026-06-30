@@ -71,11 +71,29 @@ function contributionBadge(matchType: string | null) {
   )
 }
 
-// Maps progress value to a human-readable status message shown during extraction.
+// Sequenced messages shown during extraction, advancing with the progress bar.
+// 12 messages over ~75 seconds = ~6 seconds each. Each one teaches the contributor
+// something about what the app is doing or can do.
+const PROGRESS_MESSAGES = [
+  'Scanning photo…',
+  'Summarizing posters…',
+  'Checking GPS…',
+  'Reading venues…',
+  'Finding headliners…',
+  'Weighing confidence…',
+  'Throwing out personal info…',
+  'Labeling shows…',
+  'Categorizing events…',
+  'Comparing sightings…',
+  'Almost done…',
+] as const
+
 function progressMessage(progress: number): string {
-  if (progress < 40) return 'Reading your photo…'
-  if (progress < 75) return 'Extracting events…'
-  return 'Almost done…'
+  const idx = Math.min(
+    Math.floor((progress / 95) * PROGRESS_MESSAGES.length),
+    PROGRESS_MESSAGES.length - 1
+  )
+  return PROGRESS_MESSAGES[idx]
 }
 
 // ── useProgress ────────────────────────────────────────────────────────────
@@ -492,7 +510,7 @@ export default function UploadPage() {
         {!submitResult && (
           <div className="bg-surface-card rounded-sm border border-edge p-6 space-y-4">
             <p className="text-sm text-content-secondary">
-              Photograph a bulletin board and submit it. We&apos;ll read the GPS from your
+              Photograph a bulletin board and submit it. We'll read the GPS from your
               photo to place the board on the map — make sure your camera has location enabled.
             </p>
 
