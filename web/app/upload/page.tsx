@@ -105,7 +105,7 @@ function groupByCategory(sightings: SightingRow[]): CategoryGroup[] {
   // Uncategorized last
   const uncategorized = map.get('__uncategorized__')
   if (uncategorized?.length) {
-    groups.push({ category: null, label: 'Other', items: uncategorized })
+    groups.push({ category: null, label: 'Uncategorized', items: uncategorized })
   }
 
   return groups
