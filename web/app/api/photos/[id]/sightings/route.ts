@@ -38,27 +38,27 @@ export async function GET(
     result.extraction_error = photo.extraction_error
   }
 
-  if (photo.extraction_status === 'complete') {
-    const { data: sightings } = await supabaseAdmin
-      .from('event_sightings')
-      .select(`
+  // Always return whatever sightings exist so far — not just when complete.
+  // This lets the upload page show items as they arrive during extraction.
+  const { data: sightings } = await supabaseAdmin
+    .from('event_sightings')
+    .select(`
+      id,
+      match_type,
+      extraction_confidence,
+      flyer_style,
+      raw_extraction,
+      events (
         id,
-        match_type,
-        extraction_confidence,
-        flyer_style,
-        raw_extraction,
-        events (
-          id,
-          name,
-          date_start,
-          confidence_score
-        )
-      `)
-      .eq('photo_id', id)
-      .order('created_at', { ascending: true })
+        name,
+        date_start,
+        confidence_score
+      )
+    `)
+    .eq('photo_id', id)
+    .order('created_at', { ascending: true })
 
-    result.sightings = sightings ?? []
-  }
+  result.sightings = sightings ?? []
 
   return NextResponse.json(result)
 }

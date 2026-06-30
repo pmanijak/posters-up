@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase'
@@ -59,18 +59,61 @@ async function resizeImage(file: File, maxDimension = 2400): Promise<Blob> {
 
 function matchTypeBadge(matchType: string | null) {
   const label = matchType ?? 'new'
-  const colors: Record<string, string> = {
-    new:             'text-emerald-400',
-    url:             'text-sky-400',
-    talent_anchor:   'text-violet-400',
-    location_anchor: 'text-amber-400',
-    fuzzy:           'text-content-muted',
-  }
+  // 'new' is the interesting case — a fresh event added to the system.
+  // Matches just mean it was already known; show them dimly.
   return (
-    <span className={`text-xs shrink-0 ${colors[label] ?? 'text-content-muted'}`}>
+    <span className={`text-xs shrink-0 ${label === 'new' ? 'text-content-accent' : 'text-content-muted'}`}>
       {label}
     </span>
   )
+}
+
+// ── useProgress ────────────────────────────────────────────────────────────
+
+// Advances linearly from 0 to 95 over 75 seconds while active.
+// Jumps to 100 when complete() is called.
+function useProgress(active: boolean) {
+  const [progress, setProgress] = useState(0)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    if (active) {
+      const duration = 75_000
+      const target   = 95
+      const tick     = 250
+      const step     = (target / duration) * tick
+
+      intervalRef.current = setInterval(() => {
+        setProgress(p => {
+          const next = p + step
+          return next >= target ? target : next
+        })
+      }, tick)
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [active])
+
+  function complete() {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    setProgress(100)
+  }
+
+  function reset() {
+    setProgress(0)
+  }
+
+  return { progress, complete, reset }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────
@@ -94,6 +137,11 @@ export default function UploadPage() {
   const [sightings, setSightings]               = useState<SightingRow[]>([])
   const [extractionError, setExtractionError]   = useState<string | null>(null)
   const [showRaw, setShowRaw]                   = useState(false)
+
+  // Progress bar — active while extraction is pending, jumps to 100 on complete
+  const { progress, complete: completeProgress, reset: resetProgress } = useProgress(
+    extractionStatus === 'pending'
+  )
 
   // Board details submission
   const [locationName, setLocationName]                               = useState('')
@@ -133,9 +181,8 @@ export default function UploadPage() {
   }, [submitResult?.board_id])
 
   // Poll /api/photos/[id]/sightings every 3 seconds until complete or failed.
-  // Starts as soon as we have a photo_id from the submit response.
-  // State resets are inside poll() before the first await, not in the effect
-  // body — satisfies react-hooks/set-state-in-effect.
+  // State resets are inside poll() before the first await to satisfy
+  // react-hooks/set-state-in-effect.
   useEffect(() => {
     const photoId = submitResult?.photo_id
     if (!photoId) return
@@ -143,8 +190,6 @@ export default function UploadPage() {
     let cancelled = false
 
     async function poll() {
-      // Resets go here, before the first await, so they run synchronously
-      // on poll() invocation but are inside a function, not the effect body.
       setExtractionStatus('pending')
       setSightings([])
       setExtractionError(null)
@@ -169,8 +214,10 @@ export default function UploadPage() {
 
         const data = await res.json()
 
+        if (data.sightings) setSightings(data.sightings)
+
         if (data.extraction_status === 'complete') {
-          setSightings(data.sightings ?? [])
+          completeProgress()
           setExtractionStatus('complete')
           break
         } else if (data.extraction_status === 'failed') {
@@ -178,7 +225,6 @@ export default function UploadPage() {
           setExtractionStatus('failed')
           break
         }
-        // still 'pending' — loop continues
       }
     }
 
@@ -220,6 +266,7 @@ export default function UploadPage() {
     const file = e.target.files?.[0]
     if (!file || !user) return
 
+    resetProgress()
     setUploading(true)
     setError(null)
     setSubmitResult(null)
@@ -437,6 +484,7 @@ export default function UploadPage() {
             />
           </label>
 
+          {/* Upload spinner — just for the fast storage upload step */}
           {uploading && (
             <div className="h-1 w-full bg-surface-raised rounded-full overflow-hidden">
               <div className="h-full w-full bg-content-secondary rounded-full animate-pulse" />
@@ -462,7 +510,7 @@ export default function UploadPage() {
               }
             </div>
 
-            {/* Fast-path warnings (GPS missing, rate limit config, etc.) */}
+            {/* Fast-path warnings */}
             {submitResult.warnings && submitResult.warnings.length > 0 && (
               <div className="px-4 py-3 space-y-1">
                 {submitResult.warnings.map((w, i) => (
@@ -471,13 +519,21 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Extraction status */}
-            {extractionStatus === 'pending' && (
-              <div className="px-4 py-3 space-y-2">
-                <p className="text-xs text-content-muted">Extracting events…</p>
-                <div className="h-0.5 w-full bg-surface-raised rounded-full overflow-hidden">
-                  <div className="h-full w-full bg-content-secondary rounded-full animate-pulse" />
+            {/* Extraction progress — visible while Claude is working */}
+            {(extractionStatus === 'pending' || extractionStatus === 'complete') && (
+              <div className="px-4 py-3 space-y-1.5">
+                <div className="h-1 w-full bg-surface-raised rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-content-secondary rounded-full"
+                    style={{ width: `${progress}%`, transition: 'width 0.25s linear' }}
+                  />
                 </div>
+                <p className="text-xs text-content-muted text-right">
+                  {extractionStatus === 'complete'
+                    ? `${sightings.length} item${sightings.length !== 1 ? 's' : ''} extracted`
+                    : `${Math.round(progress)}%`
+                  }
+                </p>
               </div>
             )}
 
@@ -487,11 +543,9 @@ export default function UploadPage() {
               </div>
             )}
 
-            {extractionStatus === 'complete' && (
+            {/* Sightings list — appears when extraction completes */}
+            {extractionStatus === 'complete' && sightings.length > 0 && (
               <div className="px-4 py-3 space-y-1">
-                <p className="text-xs text-content-muted mb-2">
-                  {sightings.length} item{sightings.length !== 1 ? 's' : ''} extracted
-                </p>
                 {sightings.map((s) => (
                   <div key={s.id} className="flex items-center justify-between gap-4">
                     <Link
@@ -514,7 +568,7 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Board details — shown as soon as board_id is available, before extraction finishes */}
+            {/* Board details — shown as soon as board_id is available */}
             {submitResult.board_id && (
               <div className="px-4 py-5 space-y-5">
 
