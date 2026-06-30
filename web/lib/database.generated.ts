@@ -333,6 +333,7 @@ export type Database = {
           extraction_confidence: number
           flyer_style: string | null
           id: string
+          match_type: string | null
           photo_id: string | null
           raw_extraction: Json
           review_status: string
@@ -349,6 +350,7 @@ export type Database = {
           extraction_confidence?: number
           flyer_style?: string | null
           id?: string
+          match_type?: string | null
           photo_id?: string | null
           raw_extraction: Json
           review_status?: string
@@ -365,6 +367,7 @@ export type Database = {
           extraction_confidence?: number
           flyer_style?: string | null
           id?: string
+          match_type?: string | null
           photo_id?: string | null
           raw_extraction?: Json
           review_status?: string
@@ -1484,24 +1487,44 @@ export type Database = {
           isSetofReturn: true
         }
       }
-      find_event_match: {
-        Args: {
-          p_board_lat: number
-          p_board_lng: number
-          p_date_start: string
-          p_event_url: string
-          p_location_name: string
-          p_name: string
-          p_talent_name?: string
-        }
-        Returns: Database["public"]["CompositeTypes"]["event_match_result"]
-        SetofOptions: {
-          from: "*"
-          to: "event_match_result"
-          isOneToOne: true
-          isSetofReturn: false
-        }
-      }
+      find_event_match:
+        | {
+            Args: {
+              p_board_lat: number
+              p_board_lng: number
+              p_date_start: string
+              p_event_url: string
+              p_location_name: string
+              p_name: string
+              p_talent_name?: string
+            }
+            Returns: Database["public"]["CompositeTypes"]["event_match_result"]
+            SetofOptions: {
+              from: "*"
+              to: "event_match_result"
+              isOneToOne: true
+              isSetofReturn: false
+            }
+          }
+        | {
+            Args: {
+              p_board_lat: number
+              p_board_lng: number
+              p_date_confidence?: number
+              p_date_start: string
+              p_event_url: string
+              p_location_name: string
+              p_name: string
+              p_talent_name?: string
+            }
+            Returns: Database["public"]["CompositeTypes"]["event_match_result"]
+            SetofOptions: {
+              from: "*"
+              to: "event_match_result"
+              isOneToOne: true
+              isSetofReturn: false
+            }
+          }
       find_nearby_board: {
         Args: { p_lat: number; p_lng: number; p_radius_meters?: number }
         Returns: {
