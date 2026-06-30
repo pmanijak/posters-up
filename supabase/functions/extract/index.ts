@@ -1,6 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SYSTEM_PROMPT } from "./system-prompt.ts";
 
+// EdgeRuntime is a Supabase Edge Runtime global — not available in standard Deno.
+// waitUntil() keeps the function alive after the response is sent.
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
+
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_EXTRACT_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -136,7 +140,6 @@ async function reverseGeocodeBoard(lat: number, lng: number): Promise<{
 async function upsertOrganization(
   name: string,
   supabase: SupabaseClient,
-  warnings: string[]
 ): Promise<string | null> {
   const canonical = name.toLowerCase().trim();
 
@@ -147,8 +150,7 @@ async function upsertOrganization(
     .maybeSingle();
 
   if (lookupError) {
-    warnings.push(`Org lookup failed for "${name}": ${lookupError.message}`);
-    console.error("Org lookup error:", JSON.stringify(lookupError));
+    console.warn(`Org lookup failed for "${name}":`, lookupError.message);
     return null;
   }
 
@@ -171,8 +173,7 @@ async function upsertOrganization(
     .single();
 
   if (insertError) {
-    warnings.push(`Org creation failed for "${name}": ${insertError.message}`);
-    console.error("Org insert error:", JSON.stringify(insertError));
+    console.warn(`Org creation failed for "${name}":`, insertError.message);
     return null;
   }
 
@@ -186,7 +187,6 @@ async function upsertOrganization(
 async function upsertTalent(
   name: string,
   supabase: SupabaseClient,
-  warnings: string[]
 ): Promise<string | null> {
   const canonical = name.toLowerCase().trim();
 
@@ -197,8 +197,7 @@ async function upsertTalent(
     .maybeSingle();
 
   if (lookupError) {
-    warnings.push(`Talent lookup failed for "${name}": ${lookupError.message}`);
-    console.error("Talent lookup error:", JSON.stringify(lookupError));
+    console.warn(`Talent lookup failed for "${name}":`, lookupError.message);
     return null;
   }
 
@@ -221,13 +220,427 @@ async function upsertTalent(
     .single();
 
   if (insertError) {
-    warnings.push(`Talent creation failed for "${name}": ${insertError.message}`);
-    console.error("Talent insert error:", JSON.stringify(insertError));
+    console.warn(`Talent creation failed for "${name}":`, insertError.message);
     return null;
   }
 
   return newTalent?.id ?? null;
 }
+
+// ── Background extraction ──────────────────────────────────────────────────
+//
+// Everything slow: photo download, Claude call, all DB writes.
+// Called via EdgeRuntime.waitUntil() — runs after the browser response is sent.
+// Stamps the photo record complete or failed when done.
+
+async function runExtraction(
+  photoId: string,
+  photo_path: string,
+  capturedAt: string,
+  capture_date: string | undefined,
+  resolvedBoardId: string | null,
+  lat: number | undefined,
+  lng: number | undefined,
+  supabase: SupabaseClient,
+): Promise<void> {
+  try {
+
+    // ── Download photo ──────────────────────────────────────────────────────
+    const { data: photoBlob, error: downloadError } = await supabase.storage
+      .from("photos-raw")
+      .download(photo_path);
+
+    if (downloadError || !photoBlob) {
+      throw new Error(`Photo download failed: ${downloadError?.message}`);
+    }
+
+    const arrayBuffer = await photoBlob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+    let base64 = "";
+    const chunkSize = 8192;
+    for (let i = 0; i < uint8Array.length; i += chunkSize) {
+      base64 += String.fromCharCode(...uint8Array.subarray(i, i + chunkSize));
+    }
+    base64 = btoa(base64);
+    const mimeType = photoBlob.type || "image/jpeg";
+
+    // ── Board context ───────────────────────────────────────────────────────
+    let boardDescription: string | null = null;
+    let knownEvents: { name: string; date_start: string | null }[] | null = null;
+
+    if (resolvedBoardId) {
+      const { data: board, error: boardFetchError } = await supabase
+        .from("boards")
+        .select("description")
+        .eq("id", resolvedBoardId)
+        .single();
+
+      if (boardFetchError) {
+        console.warn(`Could not fetch board context: ${boardFetchError.message}`);
+      } else {
+        boardDescription = board?.description ?? null;
+      }
+
+      const { data: flyers, error: flyersError } = await supabase
+        .from("board_flyers")
+        .select("events(name, date_start)")
+        .eq("board_id", resolvedBoardId)
+        .eq("is_active", true)
+        .order("last_seen_at", { ascending: false })
+        .limit(10);
+
+      if (flyersError) {
+        console.warn(`Could not fetch known board events: ${flyersError.message}`);
+      } else if (flyers?.length) {
+        knownEvents = flyers
+          .map((f: any) => ({
+            name: f.events?.name,
+            date_start: f.events?.date_start,
+          }))
+          .filter((e: any) => e.name);
+      }
+    }
+
+    // ── Call Claude ─────────────────────────────────────────────────────────
+    const userMessage = [
+      `Photo taken: ${capture_date ?? new Date().toISOString().split("T")[0]}`,
+      `Board location: ${boardDescription ?? "unknown"}`,
+      `Known events on this board as of last photo: ${knownEvents ? JSON.stringify(knownEvents) : "none"}`,
+      "",
+      "Extract all items from this bulletin board photo.",
+    ].join("\n");
+
+    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 16000,
+        system: [
+          {
+            type: "text",
+            text: SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" },
+          }
+        ],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: mimeType, data: base64 },
+              },
+              { type: "text", text: userMessage },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (!claudeRes.ok) {
+      const err = await claudeRes.text();
+      throw new Error(`Claude API error ${claudeRes.status}: ${err}`);
+    }
+
+    const claudeData = await claudeRes.json();
+    const rawText = claudeData.content?.[0]?.text ?? "";
+
+    let extractedItems: ExtractedItem[];
+    try {
+      extractedItems = JSON.parse(extractJson(rawText)) as ExtractedItem[];
+      if (!Array.isArray(extractedItems)) throw new Error("Response was not a JSON array");
+    } catch (parseErr: any) {
+      console.error("Claude response parse failed. Raw text:", rawText.slice(0, 500));
+      throw new Error(`Failed to parse extraction response: ${parseErr.message}`);
+    }
+
+    console.log(`Claude extracted ${extractedItems.length} items for photo ${photoId}`);
+
+    // ── Write extracted items to DB ─────────────────────────────────────────
+    for (const item of extractedItems) {
+      try {
+        if (!item.name) {
+          console.warn(`Skipping unnamed item in photo ${photoId}`);
+          continue;
+        }
+
+        let eventId: string | null = null;
+        let matchType: string = "none";
+
+        // ── Event matching ──────────────────────────────────────────────────
+        // Top-billed act: prefer explicit billing_position = 1, fall back to
+        // the first talent entry. Passed to find_event_match() as the talent
+        // anchor signal — a stable identity even when the AI names the event
+        // differently across extractions of the same flyer.
+        const topAct: string | null =
+          item.talent.find(t => t.billing_position === 1)?.name
+          ?? item.talent[0]?.name
+          ?? null;
+
+        const { data: match, error: matchError } = await supabase.rpc("find_event_match", {
+          p_name:            item.name,
+          p_date_start:      item.date_start ?? null,
+          p_location_name:   item.location_name ?? null,
+          p_board_lat:       lat ?? null,
+          p_board_lng:       lng ?? null,
+          p_event_url:       item.event_url ?? null,
+          p_talent_name:     topAct,
+          p_date_confidence: item.field_confidence?.date ?? null,
+        });
+
+        if (matchError) {
+          console.warn(`Event match check failed for "${item.name}":`, matchError.message);
+        } else if (match?.match_id) {
+          eventId = match.match_id;
+          matchType = match.match_type;
+        }
+
+        // ── Organization lookup / create ────────────────────────────────────
+        const organizationId: string | null = item.organization
+          ? await upsertOrganization(item.organization, supabase)
+          : null;
+
+        // ── Create or update event ──────────────────────────────────────────
+        if (!eventId) {
+          const { data: newEvent, error: eventInsertError } = await supabase
+            .from("events")
+            .insert({
+              name: item.name,
+              organization_id: organizationId,
+              content_type: item.content_type ?? "event",
+              event_category: item.event_category ?? null,
+              tags: item.tags ?? [],
+              flyer_style: item.flyer_style ?? null,
+              date_type: item.date_type ?? "unknown",
+              date_start: item.date_start ?? null,
+              date_end: item.date_end ?? null,
+              time_start: item.time_start ?? null,
+              time_end: item.time_end ?? null,
+              recurrence_rule: item.recurrence_rule ?? null,
+              date_raw: item.date_raw ?? null,
+              location_name: item.location_name ?? null,
+              location_address: item.location_address ?? null,
+              description: item.description ?? null,
+              contact: item.contact ?? null,
+              event_url: item.event_url ?? null,
+              price_raw: item.price_raw ?? null,
+              is_free: item.is_free ?? null,
+              age_restriction: item.age_restriction ?? null,
+              is_public: item.is_public ?? null,
+              language: item.language ?? null,
+              is_outdoor: item.is_outdoor ?? null,
+              accessibility: item.accessibility ?? [],
+              masks_required: item.masks_required ?? null,
+              rsvp_required: item.rsvp_required ?? null,
+              rsvp_url: item.rsvp_url ?? null,
+              first_sighted_at: capturedAt,
+              last_sighted_at: capturedAt,
+            })
+            .select("id")
+            .single();
+
+          if (eventInsertError) {
+            console.error(`Event insert failed for "${item.name}":`, JSON.stringify(eventInsertError));
+            continue;
+          }
+
+          eventId = newEvent?.id ?? null;
+        } else {
+          // Existing event — merge in new information, bump observation timestamp.
+          // Field update rules:
+          //   Arrays (tags, accessibility): union-merge, deduplicated
+          //   Booleans (is_free, is_public, is_outdoor, rsvp_required): use != null
+          //     check so that false is not treated as "no value" and skipped
+          //   Strings: only update when incoming value is non-null/non-empty
+          const { data: existing, error: fetchExistingError } = await supabase
+            .from("events")
+            .select("tags, accessibility")
+            .eq("id", eventId)
+            .single();
+
+          if (fetchExistingError) {
+            console.warn(`Could not fetch existing event data for merge (id: ${eventId}):`, fetchExistingError.message);
+          }
+
+          const { error: updateError } = await supabase
+            .from("events")
+            .update({
+              last_sighted_at: capturedAt,
+              updated_at: capturedAt,
+              // Arrays: union-merge across sightings
+              tags: [...new Set([...(existing?.tags ?? []), ...(item.tags ?? [])])],
+              accessibility: [
+                ...new Set([
+                  ...(existing?.accessibility ?? []),
+                  ...(item.accessibility ?? []),
+                ]),
+              ],
+              // Strings: last non-null value wins
+              ...(item.event_category  && { event_category:  item.event_category }),
+              ...(item.age_restriction && { age_restriction: item.age_restriction }),
+              ...(item.language        && { language:        item.language }),
+              ...(item.masks_required  && { masks_required:  item.masks_required }),
+              ...(item.price_raw       && { price_raw:       item.price_raw }),
+              ...(item.event_url       && { event_url:       item.event_url }),
+              ...(item.flyer_style     && { flyer_style:     item.flyer_style }),
+              // Booleans: != null so false is not silently skipped
+              ...(item.is_free    != null && { is_free:    item.is_free }),
+              ...(item.is_outdoor != null && { is_outdoor: item.is_outdoor }),
+              ...(item.is_public  != null && { is_public:  item.is_public }),
+              ...(item.rsvp_required != null && { rsvp_required: item.rsvp_required }),
+              // enrichment_attempted_at is NOT reset here unconditionally.
+              // maybe_reenqueue_enrichment() below decides whether to re-queue
+              // based on verification status and whether new search signal arrived.
+            })
+            .eq("id", eventId);
+
+          if (updateError) {
+            console.warn(`Event merge failed for "${item.name}" (id: ${eventId}):`, updateError.message);
+          }
+
+          // Re-queue enrichment only if it would produce a different result.
+          // Passes all four signal fields so the function can decide whether
+          // any of them represent genuinely new search signal worth re-running.
+          const { error: reenqueueError } = await supabase.rpc(
+            "maybe_reenqueue_enrichment",
+            {
+              p_event_id:        eventId,
+              p_new_event_url:   item.event_url     ?? null,
+              p_new_location:    item.location_name ?? null,
+              p_new_date_start:  item.date_start    ?? null,
+              p_new_description: item.description   ?? null,
+            }
+          );
+
+          if (reenqueueError) {
+            console.warn(`maybe_reenqueue_enrichment failed for "${item.name}":`, reenqueueError.message);
+          }
+        }
+
+        if (!eventId) {
+          console.warn(`No event ID after insert for "${item.name}" — skipping sighting`);
+          continue;
+        }
+
+        // ── Sighting ────────────────────────────────────────────────────────
+        const { error: sightingError } = await supabase.from("event_sightings").insert({
+          event_id: eventId,
+          photo_id: photoId,
+          board_id: resolvedBoardId,
+          raw_extraction: item,
+          extraction_confidence: item.confidence ?? 0.5,
+          flyer_style: item.flyer_style ?? null,
+          match_type: matchType === "none" ? "new" : matchType,
+          sighted_at: capturedAt,
+        });
+
+        if (sightingError) {
+          console.warn(`Sighting insert failed for "${item.name}":`, sightingError.message);
+        }
+
+        // ── Board flyer upsert ──────────────────────────────────────────────
+        if (resolvedBoardId) {
+          const { error: flyerError } = await supabase.from("board_flyers").upsert(
+            {
+              board_id: resolvedBoardId,
+              event_id: eventId,
+              last_seen_at: capturedAt,
+              is_active: true,
+              removed_at: null,
+            },
+            { onConflict: "board_id,event_id" },
+          );
+
+          if (flyerError) {
+            console.warn(`Board flyer upsert failed for "${item.name}":`, flyerError.message);
+          }
+        }
+
+        // ── Talent confirmation ─────────────────────────────────────────────
+        // For matched events only: check incoming names against existing
+        // unconfirmed talent rows and flip confirmed = true on matches.
+        // Called before talent upserts so we only confirm rows that existed
+        // before this sighting, not ones we're about to create from this photo.
+        if (matchType !== "none") {
+          const incomingTalentNames = item.talent
+            .map(t => t.name)
+            .filter(name => name.length > 0);
+
+          if (incomingTalentNames.length > 0) {
+            const { error: confirmError } = await supabase.rpc(
+              "confirm_talent_from_sighting",
+              {
+                p_event_id:              eventId,
+                p_incoming_talent_names: incomingTalentNames,
+              }
+            );
+
+            if (confirmError) {
+              console.warn(`confirm_talent_from_sighting failed for "${item.name}":`, confirmError.message);
+            }
+          }
+        }
+
+        // ── Talent ──────────────────────────────────────────────────────────
+        for (const t of item.talent) {
+          if (!t.name) continue;
+
+          const talentId = await upsertTalent(t.name, supabase);
+          if (!talentId) continue;
+
+          const { error: linkError } = await supabase.from("event_talent").upsert(
+            {
+              event_id: eventId,
+              talent_id: talentId,
+              role: t.role ?? null,
+              billing_position: t.billing_position ?? null,
+            },
+            { onConflict: "event_id,talent_id" },
+          );
+
+          if (linkError) {
+            console.warn(`event_talent link failed for "${t.name}" on "${item.name}":`, linkError.message);
+          }
+        }
+
+      } catch (itemErr: any) {
+        console.error(`Unhandled error processing item "${item.name ?? "(unnamed)"}":`, itemErr);
+      }
+    }
+
+    // ── Mark complete ───────────────────────────────────────────────────────
+    await supabase
+      .from("photos")
+      .update({
+        extraction_status: "complete",
+        extracted_at: new Date().toISOString(),
+      })
+      .eq("id", photoId);
+
+    console.log(`Extraction complete for photo ${photoId}`);
+
+  } catch (err: any) {
+    console.error(`runExtraction failed for photo ${photoId}:`, err);
+    await supabase
+      .from("photos")
+      .update({
+        extraction_status: "failed",
+        extraction_error: err?.message ?? String(err),
+      })
+      .eq("id", photoId);
+  }
+}
+
+// ── Request handler ────────────────────────────────────────────────────────
+//
+// Fast path only: auth + rate limit + board resolution + photo record.
+// Returns {photo_id, board_id} to the browser in ~1s.
+// All slow work (photo download, Claude, DB writes) runs in the background.
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -306,26 +719,6 @@ Deno.serve(async (req) => {
     return respond({ error: "Daily submission limit reached" }, 429);
   }
 
-  // ── Download photo ────────────────────────────────────────────────────────
-  const { data: photoBlob, error: downloadError } = await supabase.storage
-    .from("photos-raw")
-    .download(photo_path);
-
-  if (downloadError || !photoBlob) {
-    console.error("Photo download error:", JSON.stringify(downloadError));
-    return respond({ error: "Photo not found", detail: downloadError?.message }, 404);
-  }
-
-  const arrayBuffer = await photoBlob.arrayBuffer();
-  const uint8Array = new Uint8Array(arrayBuffer);
-  let base64 = "";
-  const chunkSize = 8192;
-  for (let i = 0; i < uint8Array.length; i += chunkSize) {
-    base64 += String.fromCharCode(...uint8Array.subarray(i, i + chunkSize));
-  }
-  base64 = btoa(base64);
-  const mimeType = photoBlob.type || "image/jpeg";
-
   // ── Resolve board ─────────────────────────────────────────────────────────
   let resolvedBoardId: string | null = board_id ?? null;
 
@@ -343,7 +736,7 @@ Deno.serve(async (req) => {
       resolvedBoardId = nearby[0].id;
       console.log("Found existing board:", resolvedBoardId);
     } else {
-      const geo = await reverseGeocodeBoard(lat, lng)
+      const geo = await reverseGeocodeBoard(lat, lng);
 
       const { data: newBoard, error: boardError } = await supabase
         .from("boards")
@@ -355,124 +748,19 @@ Deno.serve(async (req) => {
           geo_country:  geo?.geo_country  ?? null,
         })
         .select("id")
-        .single()
+        .single();
 
       if (boardError) {
-        warnings.push(`Board creation failed: ${boardError.message}`)
-        console.error("Board insert error:", JSON.stringify(boardError))
+        warnings.push(`Board creation failed: ${boardError.message}`);
+        console.error("Board insert error:", JSON.stringify(boardError));
       } else {
-        resolvedBoardId = newBoard?.id ?? null
-        console.log("Created new board:", resolvedBoardId, "—", geo?.description ?? "no description")
+        resolvedBoardId = newBoard?.id ?? null;
+        console.log("Created new board:", resolvedBoardId, "—", geo?.description ?? "no description");
       }
     }
   }
 
   console.log("Board resolved:", resolvedBoardId ?? "none", "| lat:", lat, "| lng:", lng);
-
-  // ── Board context ─────────────────────────────────────────────────────────
-  let boardDescription: string | null = null;
-  let knownEvents: { name: string; date_start: string | null }[] | null = null;
-
-  if (resolvedBoardId) {
-    const { data: board, error: boardFetchError } = await supabase
-      .from("boards")
-      .select("description")
-      .eq("id", resolvedBoardId)
-      .single();
-
-    if (boardFetchError) {
-      warnings.push(`Could not fetch board context: ${boardFetchError.message}`);
-      console.error("Board context fetch error:", JSON.stringify(boardFetchError));
-    } else {
-      boardDescription = board?.description ?? null;
-    }
-
-    const { data: flyers, error: flyersError } = await supabase
-      .from("board_flyers")
-      .select("events(name, date_start)")
-      .eq("board_id", resolvedBoardId)
-      .eq("is_active", true)
-      .order("last_seen_at", { ascending: false })
-      .limit(10);
-
-    if (flyersError) {
-      warnings.push(`Could not fetch known board events: ${flyersError.message}`);
-      console.error("Board flyers fetch error:", JSON.stringify(flyersError));
-    } else if (flyers?.length) {
-      knownEvents = flyers
-        .map((f: any) => ({
-          name: f.events?.name,
-          date_start: f.events?.date_start,
-        }))
-        .filter((e: any) => e.name);
-    }
-  }
-
-  // ── Call Claude ───────────────────────────────────────────────────────────
-  const userMessage = [
-    `Photo taken: ${capture_date ?? new Date().toISOString().split("T")[0]}`,
-    `Board location: ${boardDescription ?? "unknown"}`,
-    `Known events on this board as of last photo: ${knownEvents ? JSON.stringify(knownEvents) : "none"}`,
-    "",
-    "Extract all items from this bulletin board photo.",
-  ].join("\n");
-
-  const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 16000,
-      system: [
-        {
-          type: "text",
-          text: SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
-        }
-      ],
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: mimeType, data: base64 },
-            },
-            { type: "text", text: userMessage },
-          ],
-        },
-      ],
-    }),
-  });
-
-  if (!claudeRes.ok) {
-    const err = await claudeRes.text();
-    console.error("Claude API error:", claudeRes.status, err);
-    return respond({ error: "Claude API error", detail: err, warnings }, 502);
-  }
-
-  const claudeData = await claudeRes.json();
-  const rawText = claudeData.content?.[0]?.text ?? "";
-
-  let extractedItems: ExtractedItem[];
-  try {
-    extractedItems = JSON.parse(extractJson(rawText)) as ExtractedItem[];
-    if (!Array.isArray(extractedItems)) throw new Error("Response was not a JSON array");
-  } catch (parseErr: any) {
-    console.error("Claude response parse failed. Raw text:", rawText.slice(0, 500));
-    return respond({
-      error: "Failed to parse extraction response",
-      detail: parseErr.message,
-      raw_preview: rawText.slice(0, 200),
-      warnings,
-    }, 500);
-  }
-
-  console.log(`Claude extracted ${extractedItems.length} items`);
 
   // ── Create photo record ───────────────────────────────────────────────────
   const deleteAfter = new Date();
@@ -485,23 +773,23 @@ Deno.serve(async (req) => {
       submitted_by: user.id,
       image_url: photo_path,
       delete_after: deleteAfter.toISOString(),
-      extraction_status: "complete",
-      extracted_at: new Date().toISOString(),  // processing time, not capture time
+      extraction_status: "pending",  // updated to 'complete'/'failed' by runExtraction
     })
     .select("id")
     .single();
 
-  if (photoError) {
-    warnings.push(`Photo record creation failed: ${photoError.message}`);
+  if (photoError || !photoRecord) {
     console.error("Photo insert error:", JSON.stringify(photoError));
+    return respond({ error: "Failed to create photo record", detail: photoError?.message, warnings }, 500);
   }
 
+  // ── Update board timestamps ───────────────────────────────────────────────
   if (resolvedBoardId) {
     const { error: boardUpdateError } = await supabase
       .from("boards")
       .update({
         last_sighted_at: capturedAt,
-        current_state_photo_id: photoRecord?.id,
+        current_state_photo_id: photoRecord.id,
       })
       .eq("id", resolvedBoardId);
 
@@ -511,282 +799,28 @@ Deno.serve(async (req) => {
     }
   }
 
-  // ── Write extracted items to DB ───────────────────────────────────────────
-  const results: { event_id: string; name: string; match_type?: string }[] = [];
-  const skipped: { name: string; reason: string }[] = [];
+  // ── Hand off to background ────────────────────────────────────────────────
+  // Browser gets photo_id immediately. runExtraction() continues after the
+  // response is sent: photo download → Claude → all DB writes → stamp complete.
+  EdgeRuntime.waitUntil(
+    runExtraction(
+      photoRecord.id,
+      photo_path,
+      capturedAt,
+      capture_date,
+      resolvedBoardId,
+      lat,
+      lng,
+      supabase,
+    )
+  );
 
-  for (const item of extractedItems) {
-    try {
-    if (!item.name) {
-      skipped.push({ name: "(unnamed)", reason: "Missing name field" });
-      continue;
-    }
-
-    let eventId: string | null = null;
-    let matchType: string = "none";
-
-    // ── Event matching ────────────────────────────────────────────────────
-    // Top-billed act: prefer explicit billing_position = 1, fall back to
-    // the first talent entry. Passed to find_event_match() as the talent
-    // anchor signal — a stable identity even when the AI names the event
-    // differently across extractions of the same flyer.
-    const topAct: string | null =
-      item.talent.find(t => t.billing_position === 1)?.name
-      ?? item.talent[0]?.name
-      ?? null;
-
-    const { data: match, error: matchError } = await supabase.rpc("find_event_match", {
-      p_name:            item.name,
-      p_date_start:      item.date_start ?? null,
-      p_location_name:   item.location_name ?? null,
-      p_board_lat:       lat ?? null,
-      p_board_lng:       lng ?? null,
-      p_event_url:       item.event_url ?? null,
-      p_talent_name:     topAct,
-      p_date_confidence: item.field_confidence?.date ?? null,
-    });
-
-    if (matchError) {
-      warnings.push(`Event match check failed for "${item.name}": ${matchError.message}`);
-      console.error("find_event_match error:", JSON.stringify(matchError));
-    } else if (match?.match_id) {
-      eventId = match.match_id;
-      matchType = match.match_type;
-    }
-
-    // ── Organization lookup / create ──────────────────────────────────────
-    const organizationId: string | null = item.organization
-      ? await upsertOrganization(item.organization, supabase, warnings)
-      : null;
-
-    // ── Create or update event ────────────────────────────────────────────
-    if (!eventId) {
-      const { data: newEvent, error: eventInsertError } = await supabase
-        .from("events")
-        .insert({
-          name: item.name,
-          organization_id: organizationId,
-          content_type: item.content_type ?? "event",
-          event_category: item.event_category ?? null,
-          tags: item.tags ?? [],
-          flyer_style: item.flyer_style ?? null,
-          date_type: item.date_type ?? "unknown",
-          date_start: item.date_start ?? null,
-          date_end: item.date_end ?? null,
-          time_start: item.time_start ?? null,
-          time_end: item.time_end ?? null,
-          recurrence_rule: item.recurrence_rule ?? null,
-          date_raw: item.date_raw ?? null,
-          location_name: item.location_name ?? null,
-          location_address: item.location_address ?? null,
-          description: item.description ?? null,
-          contact: item.contact ?? null,
-          event_url: item.event_url ?? null,
-          price_raw: item.price_raw ?? null,
-          is_free: item.is_free ?? null,
-          age_restriction: item.age_restriction ?? null,
-          is_public: item.is_public ?? null,
-          language: item.language ?? null,
-          is_outdoor: item.is_outdoor ?? null,
-          accessibility: item.accessibility ?? [],
-          masks_required: item.masks_required ?? null,
-          rsvp_required: item.rsvp_required ?? null,
-          rsvp_url: item.rsvp_url ?? null,
-          first_sighted_at: capturedAt,
-          last_sighted_at: capturedAt,
-        })
-        .select("id")
-        .single();
-
-      if (eventInsertError) {
-        skipped.push({ name: item.name, reason: `Event insert failed: ${eventInsertError.message}` });
-        console.error(`Event insert error for "${item.name}":`, JSON.stringify(eventInsertError));
-        continue;
-      }
-
-      eventId = newEvent?.id ?? null;
-    } else {
-      // Existing event — merge in new information, bump observation timestamp.
-      // Field update rules:
-      //   Arrays (tags, accessibility): union-merge, deduplicated
-      //   Booleans (is_free, is_public, is_outdoor, rsvp_required): use != null
-      //     check so that false is not treated as "no value" and skipped
-      //   Strings: only update when incoming value is non-null/non-empty
-      const { data: existing, error: fetchExistingError } = await supabase
-        .from("events")
-        .select("tags, accessibility")
-        .eq("id", eventId)
-        .single();
-
-      if (fetchExistingError) {
-        warnings.push(`Could not fetch existing event data for merge (id: ${eventId}): ${fetchExistingError.message}`);
-        console.error("Existing event fetch error:", JSON.stringify(fetchExistingError));
-      }
-
-      const { error: updateError } = await supabase
-        .from("events")
-        .update({
-          last_sighted_at: capturedAt,
-          updated_at: capturedAt,
-          // Arrays: union-merge across sightings
-          tags: [...new Set([...(existing?.tags ?? []), ...(item.tags ?? [])])],
-          accessibility: [
-            ...new Set([
-              ...(existing?.accessibility ?? []),
-              ...(item.accessibility ?? []),
-            ]),
-          ],
-          // Strings: last non-null value wins
-          ...(item.event_category  && { event_category:  item.event_category }),
-          ...(item.age_restriction && { age_restriction: item.age_restriction }),
-          ...(item.language        && { language:        item.language }),
-          ...(item.masks_required  && { masks_required:  item.masks_required }),
-          ...(item.price_raw       && { price_raw:       item.price_raw }),
-          ...(item.event_url       && { event_url:       item.event_url }),
-          ...(item.flyer_style     && { flyer_style:     item.flyer_style }),
-          // Booleans: != null so false is not silently skipped
-          ...(item.is_free    != null && { is_free:    item.is_free }),
-          ...(item.is_outdoor != null && { is_outdoor: item.is_outdoor }),
-          ...(item.is_public  != null && { is_public:  item.is_public }),
-          ...(item.rsvp_required != null && { rsvp_required: item.rsvp_required }),
-          // enrichment_attempted_at is NOT reset here unconditionally.
-          // maybe_reenqueue_enrichment() below decides whether to re-queue
-          // based on verification status and whether new search signal arrived.
-        })
-        .eq("id", eventId);
-
-      if (updateError) {
-        warnings.push(`Event merge failed for "${item.name}" (id: ${eventId}): ${updateError.message}`);
-        console.error("Event update error:", JSON.stringify(updateError));
-      }
-
-      // Re-queue enrichment only if it would produce a different result.
-      // Passes all four signal fields so the function can decide whether
-      // any of them represent genuinely new search signal worth re-running.
-      const { error: reenqueueError } = await supabase.rpc(
-        "maybe_reenqueue_enrichment",
-        {
-          p_event_id:        eventId,
-          p_new_event_url:   item.event_url     ?? null,
-          p_new_location:    item.location_name ?? null,
-          p_new_date_start:  item.date_start    ?? null,
-          p_new_description: item.description   ?? null,
-        }
-      );
-
-      if (reenqueueError) {
-        warnings.push(`maybe_reenqueue_enrichment failed for "${item.name}": ${reenqueueError.message}`);
-        console.error("maybe_reenqueue_enrichment error:", JSON.stringify(reenqueueError));
-      }
-    }
-
-    if (!eventId) {
-      skipped.push({ name: item.name, reason: "No event ID after insert" });
-      continue;
-    }
-
-    // ── Sighting ──────────────────────────────────────────────────────────
-    const { error: sightingError } = await supabase.from("event_sightings").insert({
-      event_id: eventId,
-      photo_id: photoRecord?.id ?? null,
-      board_id: resolvedBoardId,
-      raw_extraction: item,
-      extraction_confidence: item.confidence ?? 0.5,
-      flyer_style: item.flyer_style ?? null,
-      sighted_at: capturedAt,
-    });
-
-    if (sightingError) {
-      warnings.push(`Sighting insert failed for "${item.name}": ${sightingError.message}`);
-      console.error("Sighting insert error:", JSON.stringify(sightingError));
-    }
-
-    // ── Board flyer upsert ────────────────────────────────────────────────
-    if (resolvedBoardId) {
-      const { error: flyerError } = await supabase.from("board_flyers").upsert(
-        {
-          board_id: resolvedBoardId,
-          event_id: eventId,
-          last_seen_at: capturedAt,
-          is_active: true,
-          removed_at: null,
-        },
-        { onConflict: "board_id,event_id" },
-      );
-
-      if (flyerError) {
-        warnings.push(`Board flyer upsert failed for "${item.name}": ${flyerError.message}`);
-        console.error("Board flyer upsert error:", JSON.stringify(flyerError));
-      }
-    }
-
-    // ── Talent confirmation ───────────────────────────────────────────────
-    // For matched events only: check incoming names against existing
-    // unconfirmed talent rows and flip confirmed = true on matches.
-    // Called before talent upserts so we only confirm rows that existed
-    // before this sighting, not ones we're about to create from this photo.
-    if (matchType !== "none") {
-      const incomingTalentNames = item.talent
-        .map(t => t.name)
-        .filter(name => name.length > 0);
-
-      if (incomingTalentNames.length > 0) {
-        const { error: confirmError } = await supabase.rpc(
-          "confirm_talent_from_sighting",
-          {
-            p_event_id:              eventId,
-            p_incoming_talent_names: incomingTalentNames,
-          }
-        );
-
-        if (confirmError) {
-          warnings.push(`confirm_talent_from_sighting failed for "${item.name}": ${confirmError.message}`);
-          console.error("confirm_talent_from_sighting error:", JSON.stringify(confirmError));
-        }
-      }
-    }
-
-    // ── Talent ────────────────────────────────────────────────────────────
-    for (const t of item.talent) {
-      if (!t.name) continue;
-
-      const talentId = await upsertTalent(t.name, supabase, warnings);
-      if (!talentId) continue;
-
-      const { error: linkError } = await supabase.from("event_talent").upsert(
-        {
-          event_id: eventId,
-          talent_id: talentId,
-          role: t.role ?? null,
-          billing_position: t.billing_position ?? null,
-        },
-        { onConflict: "event_id,talent_id" },
-      );
-
-      if (linkError) {
-        warnings.push(`event_talent link failed for "${t.name}" on "${item.name}": ${linkError.message}`);
-        console.error("event_talent upsert error:", JSON.stringify(linkError));
-      }
-    }
-
-    results.push({ event_id: eventId, name: item.name, match_type: matchType });
-    } catch (err: any) {
-      console.error(`Unhandled error processing item "${item.name ?? "(unnamed)"}":`, err);
-      skipped.push({ name: item.name ?? "(unnamed)", reason: `Unhandled error: ${err?.message ?? err}` });
-    }
-  }
-
-  // ── Done ──────────────────────────────────────────────────────────────────
   const response: any = {
     success: true,
-    photo_id: photoRecord?.id ?? null,
+    photo_id: photoRecord.id,
     board_id: resolvedBoardId,
-    events_extracted: results.length,
-    events_skipped: skipped.length,
-    events: results,
   };
 
-  if (skipped.length > 0) response.skipped = skipped;
   if (warnings.length > 0) response.warnings = warnings;
 
   return respond(response);
