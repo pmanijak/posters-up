@@ -812,7 +812,7 @@ export default function UploadPage() {
               <div className="px-4 py-4 flex justify-center">
                 <button
                   onClick={handleReset}
-                  className="text-sm text-content-muted hover:text-content-secondary transition-colors"
+                  className="text-sm text-content-muted underline hover:text-content-secondary transition-colors"
                 >
                   Submit another photo
                 </button>
