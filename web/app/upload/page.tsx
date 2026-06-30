@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase'
 import { CATEGORY_MAP, categoryColor } from '@/lib/categories'
@@ -187,6 +188,8 @@ function useProgress(active: boolean) {
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
+  const router = useRouter()
+
   // Auth
   const [user, setUser]             = useState<User | null>(null)
   const [loading, setLoading]       = useState(true)
@@ -198,7 +201,16 @@ export default function UploadPage() {
 
   // Upload
   const [uploading, setUploading]       = useState(false)
-  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null)
+  // Lazy initializer reads ?photo and ?board from the URL on first render,
+  // restoring the results panel when the user navigates back from an event page.
+  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(() => {
+    if (typeof window === 'undefined') return null
+    const params = new URLSearchParams(window.location.search)
+    const photoId = params.get('photo')
+    const boardId = params.get('board')
+    if (!photoId) return null
+    return { success: true, photo_id: photoId, board_id: boardId }
+  })
   // Incremented on reset so the file input remounts and accepts the same file again.
   const [uploadKey, setUploadKey]       = useState(0)
 
@@ -315,6 +327,7 @@ export default function UploadPage() {
     setRequiresEntryToPhotograph(null)
     setRequiresEntryToPost(null)
     setUploadKey(k => k + 1)
+    router.replace(window.location.pathname)
   }
 
   async function sendOtp() {
@@ -397,6 +410,10 @@ export default function UploadPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Upload failed')
       setSubmitResult(data as SubmitResult)
+      // Persist photo + board IDs in the URL so back-navigation restores this panel.
+      const qs = new URLSearchParams({ photo: data.photo_id ?? '' })
+      if (data.board_id) qs.set('board', data.board_id)
+      router.replace(`?${qs}`)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
