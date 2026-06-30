@@ -57,14 +57,17 @@ async function resizeImage(file: File, maxDimension = 2400): Promise<Blob> {
   )
 }
 
-function matchTypeBadge(matchType: string | null) {
-  const label = matchType ?? 'new'
-  // 'new' is the interesting case — a fresh event added to the system.
-  // Matches just mean it was already known; show them dimly.
-  return (
-    <span className={`text-xs shrink-0 ${label === 'new' ? 'text-content-accent' : 'text-content-muted'}`}>
-      {label}
-    </span>
+// A contributor doesn't care which dedup tier matched. Two things matter to
+// them: did they add something new, or confirm something still up? Both are
+// valuable — a match is a fresh sighting that bumps last_seen_at and confidence.
+// Collapses null / 'none' / 'new' → New; every other tier (url, talent_anchor,
+// fuzzy, location_anchor) → Still up.
+function contributionBadge(matchType: string | null) {
+  const isNew = !matchType || matchType === 'new' || matchType === 'none'
+  return isNew ? (
+    <span className="text-xs shrink-0 text-content-accent">✨ New</span>
+  ) : (
+    <span className="text-xs shrink-0 text-content-secondary">✓ Still up</span>
   )
 }
 
@@ -505,7 +508,9 @@ export default function UploadPage() {
             <div className="px-4 py-3 flex items-center justify-between">
               <span className="text-sm text-content-primary font-medium">Photo submitted</span>
               {submitResult.board_id
-                ? <span className="text-xs text-content-muted">board linked</span>
+                ? <span className="text-xs text-content-muted">
+                    {locationName ? `Saved to ${locationName}` : 'Board saved'}
+                  </span>
                 : <span className="text-xs text-amber-400">no board — GPS missing</span>
               }
             </div>
@@ -530,7 +535,7 @@ export default function UploadPage() {
                 </div>
                 <p className="text-xs text-content-muted text-right">
                   {extractionStatus === 'complete'
-                    ? `${sightings.length} item${sightings.length !== 1 ? 's' : ''} extracted`
+                    ? `Found ${sightings.length} poster${sightings.length !== 1 ? 's' : ''} on this board`
                     : `${Math.round(progress)}%`
                   }
                 </p>
@@ -545,26 +550,26 @@ export default function UploadPage() {
 
             {/* Sightings list — appears when extraction completes */}
             {extractionStatus === 'complete' && sightings.length > 0 && (
-              <div className="px-4 py-3 space-y-1">
-                {sightings.map((s) => (
-                  <div key={s.id} className="flex items-center justify-between gap-4">
-                    <Link
-                      href={`/events/${s.events?.id}`}
-                      className="text-sm text-content-secondary hover:text-content-primary truncate"
-                    >
-                      {s.events?.name ?? '(unnamed)'}
-                    </Link>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {s.flyer_style === 'minimal' && (
-                        <span className="text-xs text-content-muted">minimal</span>
+              <div className="px-4 py-3 space-y-2">
+                {sightings.map((s) => {
+                  const hardToRead = s.extraction_confidence < 0.5
+                  return (
+                    <div key={s.id} className="space-y-0.5">
+                      <div className="flex items-center justify-between gap-4">
+                        <Link
+                          href={`/events/${s.events?.id}`}
+                          className="text-sm text-content-secondary hover:text-content-primary truncate"
+                        >
+                          {s.events?.name ?? '(unnamed)'}
+                        </Link>
+                        {contributionBadge(s.match_type)}
+                      </div>
+                      {hardToRead && (
+                        <p className="text-xs text-content-muted">Hard to read — a sharper photo would help.</p>
                       )}
-                      <span className="text-xs text-content-muted">
-                        {Math.round(s.extraction_confidence * 100)}%
-                      </span>
-                      {matchTypeBadge(s.match_type)}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
 
