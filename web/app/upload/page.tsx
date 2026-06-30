@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase'
+import { CATEGORY_MAP, categoryColor } from '@/lib/categories'
+import type { EventCategory } from '@/lib/categories'
 import exifr from 'exifr'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -28,6 +30,8 @@ interface SightingRow {
     name:             string
     date_start:       string | null
     confidence_score: number
+    // Requires event_category in the /api/photos/[id]/sightings select query.
+    event_category:   string | null
   } | null
 }
 
@@ -69,6 +73,42 @@ function contributionBadge(matchType: string | null) {
   ) : (
     <span className="text-xs shrink-0 text-content-secondary">✓ Still posted</span>
   )
+}
+
+// Groups sightings by event_category for the results list.
+// Uncategorized sightings collect under null and render last.
+interface CategoryGroup {
+  category: string | null
+  label:    string
+  items:    SightingRow[]
+}
+
+function groupByCategory(sightings: SightingRow[]): CategoryGroup[] {
+  const map = new Map<string, SightingRow[]>()
+
+  for (const s of sightings) {
+    const key = s.events?.event_category ?? '__uncategorized__'
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(s)
+  }
+
+  const groups: CategoryGroup[] = []
+  for (const [key, items] of map.entries()) {
+    if (key === '__uncategorized__') continue
+    groups.push({
+      category: key,
+      label:    CATEGORY_MAP[key as EventCategory] ?? key,
+      items,
+    })
+  }
+
+  // Uncategorized last
+  const uncategorized = map.get('__uncategorized__')
+  if (uncategorized?.length) {
+    groups.push({ category: null, label: 'Other', items: uncategorized })
+  }
+
+  return groups
 }
 
 // Sequenced messages shown during extraction, advancing with the progress bar.
@@ -593,28 +633,46 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Sightings list — appears when extraction completes */}
+            {/* Sightings list — grouped by category, appears when extraction completes */}
             {extractionStatus === 'complete' && sightings.length > 0 && (
-              <div className="px-4 py-3 space-y-2">
-                {sightings.map((s) => {
-                  const hardToRead = s.extraction_confidence < 0.5
-                  return (
-                    <div key={s.id} className="space-y-0.5">
-                      <div className="flex items-center justify-between gap-4">
-                        <Link
-                          href={`/events/${s.events?.id}`}
-                          className="text-sm text-content-secondary hover:text-content-primary truncate"
-                        >
-                          {s.events?.name ?? '(unnamed)'}
-                        </Link>
-                        {contributionBadge(s.match_type)}
-                      </div>
-                      {hardToRead && (
-                        <p className="text-xs text-content-muted">Hard to read — a sharper photo would help.</p>
-                      )}
+              <div className="px-4 py-3 space-y-4">
+                {groupByCategory(sightings).map(({ category, label, items }) => (
+                  <div key={category ?? '__uncategorized__'} className="space-y-1.5">
+
+                    {/* Category header — colored dot + label */}
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        style={{ backgroundColor: category ? categoryColor(category) : undefined }}
+                      />
+                      <span className="text-xs font-medium text-content-secondary uppercase tracking-wide">
+                        {label}
+                      </span>
                     </div>
-                  )
-                })}
+
+                    <div className="space-y-2">
+                      {items.map((s) => {
+                        const hardToRead = s.extraction_confidence < 0.5
+                        return (
+                          <div key={s.id} className="space-y-0.5 pl-3">
+                            <div className="flex items-center justify-between gap-4">
+                              <Link
+                                href={`/events/${s.events?.id}`}
+                                className="text-sm text-content-secondary hover:text-content-primary truncate"
+                              >
+                                {s.events?.name ?? '(unnamed)'}
+                              </Link>
+                              {contributionBadge(s.match_type)}
+                            </div>
+                            {hardToRead && (
+                              <p className="text-xs text-content-muted">Hard to read — a sharper photo would help.</p>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 

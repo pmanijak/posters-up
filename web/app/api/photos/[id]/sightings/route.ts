@@ -52,7 +52,8 @@ export async function GET(
         id,
         name,
         date_start,
-        confidence_score
+        confidence_score,
+        event_category
       )
     `)
     .eq('photo_id', id)
