@@ -72,7 +72,7 @@ function contributionBadge(matchType: string | null) {
   return isNew ? (
     <span className="text-xs shrink-0 text-content-accent">✨ New</span>
   ) : (
-    <span className="text-xs shrink-0 text-content-secondary">✓ Still posted</span>
+    <span className="text-xs shrink-0 text-content-secondary">✓ Confirmed</span>
   )
 }
 
