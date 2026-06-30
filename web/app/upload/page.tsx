@@ -58,17 +58,24 @@ async function resizeImage(file: File, maxDimension = 2400): Promise<Blob> {
 }
 
 // A contributor doesn't care which dedup tier matched. Two things matter to
-// them: did they add something new, or confirm something still up? Both are
+// them: did they add something new, or confirm something still posted? Both are
 // valuable — a match is a fresh sighting that bumps last_seen_at and confidence.
 // Collapses null / 'none' / 'new' → New; every other tier (url, talent_anchor,
-// fuzzy, location_anchor) → Still up.
+// fuzzy, location_anchor) → Still posted.
 function contributionBadge(matchType: string | null) {
   const isNew = !matchType || matchType === 'new' || matchType === 'none'
   return isNew ? (
     <span className="text-xs shrink-0 text-content-accent">✨ New</span>
   ) : (
-    <span className="text-xs shrink-0 text-content-secondary">✓ Still up</span>
+    <span className="text-xs shrink-0 text-content-secondary">✓ Still posted</span>
   )
+}
+
+// Maps progress value to a human-readable status message shown during extraction.
+function progressMessage(progress: number): string {
+  if (progress < 40) return 'Reading your photo…'
+  if (progress < 75) return 'Extracting events…'
+  return 'Almost done…'
 }
 
 // ── useProgress ────────────────────────────────────────────────────────────
@@ -134,12 +141,13 @@ export default function UploadPage() {
   // Upload
   const [uploading, setUploading]       = useState(false)
   const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null)
+  // Incremented on reset so the file input remounts and accepts the same file again.
+  const [uploadKey, setUploadKey]       = useState(0)
 
   // Extraction polling
   const [extractionStatus, setExtractionStatus] = useState<ExtractionStatus | null>(null)
   const [sightings, setSightings]               = useState<SightingRow[]>([])
   const [extractionError, setExtractionError]   = useState<string | null>(null)
-  const [showRaw, setShowRaw]                   = useState(false)
 
   // Progress bar — active while extraction is pending, jumps to 100 on complete
   const { progress, complete: completeProgress, reset: resetProgress } = useProgress(
@@ -234,6 +242,22 @@ export default function UploadPage() {
     poll()
     return () => { cancelled = true }
   }, [submitResult?.photo_id])
+
+  // Resets all upload and extraction state so the contributor can submit another photo.
+  function handleReset() {
+    resetProgress()
+    setSubmitResult(null)
+    setExtractionStatus(null)
+    setSightings([])
+    setExtractionError(null)
+    setBoardSubmitted(false)
+    setBoardError(null)
+    setLocationName('')
+    setDescription('')
+    setRequiresEntryToPhotograph(null)
+    setRequiresEntryToPost(null)
+    setUploadKey(k => k + 1)
+  }
 
   async function sendOtp() {
     setSubmitting(true)
@@ -464,36 +488,39 @@ export default function UploadPage() {
 
       <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
 
-        {/* Upload */}
-        <div className="bg-surface-card rounded-sm border border-edge p-6 space-y-4">
-          <p className="text-sm text-content-secondary">
-            Photograph a bulletin board and submit it. GPS and capture date are read
-            automatically from the photo.
-          </p>
+        {/* Upload — hidden once a result comes back */}
+        {!submitResult && (
+          <div className="bg-surface-card rounded-sm border border-edge p-6 space-y-4">
+            <p className="text-sm text-content-secondary">
+              Photograph a bulletin board and submit it. We&apos;ll read the GPS from your
+              photo to place the board on the map — make sure your camera has location enabled.
+            </p>
 
-          <label className={[
-            'flex items-center justify-center w-full h-24 rounded border border-dashed border-edge-subtle text-sm cursor-pointer transition-colors',
-            uploading
-              ? 'text-content-muted cursor-not-allowed'
-              : 'text-content-muted hover:border-content-muted hover:text-content-secondary',
-          ].join(' ')}>
-            {uploading ? 'Uploading…' : 'Choose a photo'}
-            <input
-              type="file"
-              accept="image/*"
-              onChange={upload}
-              disabled={uploading}
-              className="sr-only"
-            />
-          </label>
+            <label className={[
+              'flex items-center justify-center w-full h-24 rounded border border-dashed border-edge-subtle text-sm cursor-pointer transition-colors',
+              uploading
+                ? 'text-content-muted cursor-not-allowed'
+                : 'text-content-muted hover:border-content-muted hover:text-content-secondary',
+            ].join(' ')}>
+              {uploading ? 'Uploading…' : 'Choose a photo'}
+              <input
+                key={uploadKey}
+                type="file"
+                accept="image/*"
+                onChange={upload}
+                disabled={uploading}
+                className="sr-only"
+              />
+            </label>
 
-          {/* Upload spinner — just for the fast storage upload step */}
-          {uploading && (
-            <div className="h-1 w-full bg-surface-raised rounded-full overflow-hidden">
-              <div className="h-full w-full bg-content-secondary rounded-full animate-pulse" />
-            </div>
-          )}
-        </div>
+            {/* Upload spinner — just for the fast storage upload step */}
+            {uploading && (
+              <div className="h-1 w-full bg-surface-raised rounded-full overflow-hidden">
+                <div className="h-full w-full bg-content-secondary rounded-full animate-pulse" />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Upload error */}
         {error && (
@@ -511,7 +538,7 @@ export default function UploadPage() {
                 ? <span className="text-xs text-content-muted">
                     {locationName ? `Saved to ${locationName}` : 'Board saved'}
                   </span>
-                : <span className="text-xs text-amber-400">no board — GPS missing</span>
+                : <span className="text-xs text-content-muted">No GPS — board location not recorded</span>
               }
             </div>
 
@@ -533,10 +560,10 @@ export default function UploadPage() {
                     style={{ width: `${progress}%`, transition: 'width 0.25s linear' }}
                   />
                 </div>
-                <p className="text-xs text-content-muted text-right">
+                <p className="text-xs text-content-muted">
                   {extractionStatus === 'complete'
                     ? `Found ${sightings.length} poster${sightings.length !== 1 ? 's' : ''} on this board`
-                    : `${Math.round(progress)}%`
+                    : progressMessage(progress)
                   }
                 </p>
               </div>
@@ -573,8 +600,8 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Board details — shown as soon as board_id is available */}
-            {submitResult.board_id && (
+            {/* Board details — shown after extraction completes, when a board was found */}
+            {extractionStatus === 'complete' && submitResult.board_id && (
               <div className="px-4 py-5 space-y-5">
 
                 <div>
@@ -687,20 +714,17 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Raw JSON — shows sightings when available, submit result otherwise */}
-            <div className="px-4 py-3">
-              <button
-                onClick={() => setShowRaw(r => !r)}
-                className="text-xs text-content-muted hover:text-content-secondary"
-              >
-                {showRaw ? 'Hide' : 'Show'} raw JSON
-              </button>
-              {showRaw && (
-                <pre className="mt-3 text-xs text-content-muted overflow-auto leading-relaxed">
-                  {JSON.stringify(sightings.length > 0 ? sightings : submitResult, null, 2)}
-                </pre>
-              )}
-            </div>
+            {/* Submit another — shown when extraction is done */}
+            {extractionStatus === 'complete' && (
+              <div className="px-4 py-4 flex justify-center">
+                <button
+                  onClick={handleReset}
+                  className="text-sm text-content-muted hover:text-content-secondary transition-colors"
+                >
+                  Submit another photo
+                </button>
+              </div>
+            )}
 
           </div>
         )}
