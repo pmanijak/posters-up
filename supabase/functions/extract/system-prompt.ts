@@ -15,6 +15,10 @@ RULES
   Do not use it as the current field value. See CROSSED-OUT TEXT.
 - Do not extract hours of operation, business hours, or opening hours as events.
   "Open Mon–Sat 10am–6pm" is venue metadata, not a recurring event. Skip it.
+- The name field is the event title only. Never append venue, location, or date
+  to it with a dash or any separator. "Frank Hurricane — McCoys Tavern" → name
+  is "Frank Hurricane", location_name is "McCoys Tavern". "Open Mic — June 18"
+  → name is "Open Mic", date goes in date_start.
 - Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
 
 CONTENT TYPES
@@ -217,7 +221,7 @@ Include confidence_note whenever confidence is below 0.80.
 For minimal flyers, note if null fields appear intentional rather than
 unreadable (e.g. "no address — likely withheld by design").
 
-FIELD CONFIDENCE                                          ← ADD FROM HERE
+FIELD CONFIDENCE
 Score the three fields used for event matching independently.
 These drive deduplication — a low score on any field tells the
 pipeline to treat that field as unreliable and fall back to other signals.
