@@ -660,7 +660,7 @@ export default function UploadPage() {
                     <div className="flex items-center gap-1.5">
                       <span
                         className="w-1.5 h-1.5 rounded-full shrink-0"
-                        style={{ backgroundColor: category ? categoryColor(category) : undefined }}
+                        style={{ backgroundColor: category ? categoryColor(category) : 'var(--color-content-muted)' }}
                       />
                       <span className="text-xs font-medium text-content-secondary uppercase tracking-wide">
                         {label}
