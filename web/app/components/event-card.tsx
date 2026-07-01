@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import type { ReactNode } from 'react'
+import React from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { categoryColor } from '@/lib/categories'
@@ -275,12 +276,22 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
           )}
         </div>
 
-        {/* Name */}
+        {/* Name — links to the dedicated event page */}
         <h2
           className="font-bold leading-snug mb-1"
-          style={{ fontFamily: 'Georgia, serif', fontSize: '1.05rem', color: accentColor }}
+          style={{ fontFamily: 'Georgia, serif', fontSize: '1.05rem' }}
         >
-          {event.name}
+          <Link
+            href={`/events/${event.id}`}
+            className="underline underline-offset-2 decoration-2 hover:[text-decoration-color:var(--link-deco-hover)]"
+            style={{
+              color: accentColor,
+              textDecorationColor: hexToRgba(accentColor, 0.35),
+              '--link-deco-hover': hexToRgba(accentColor, 0.85),
+            } as React.CSSProperties}
+          >
+            {event.name}
+          </Link>
         </h2>
 
         {/* Talent */}
