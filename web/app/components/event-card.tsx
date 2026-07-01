@@ -201,6 +201,9 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
   }, [defaultExpanded, event.id])
 
   const q           = searchParams.get('q') ?? ''
+  const tagParam    = searchParams.get('tag') ?? ''
+  // Use whichever filter is active for text highlighting
+  const highlight   = q || tagParam
   const isMinimal   = event.flyer_style === 'minimal'
   const accentColor = categoryColor(event.event_category)
 
@@ -244,8 +247,10 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
     return `/?${params.toString()}`
   }
 
-  function tagIsActive(tag: string): boolean {
-    return q.length > 0 && tag.toLowerCase().includes(q.toLowerCase())
+  function tagIsActive(t: string): boolean {
+    if (q.length > 0)        return t.toLowerCase().includes(q.toLowerCase())
+    if (tagParam.length > 0) return t.toLowerCase() === tagParam.toLowerCase()
+    return false
   }
 
   async function handleToggle() {
@@ -313,7 +318,7 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
             it's the only content we have (no location, no talent listed) */}
         {event.description && (!isMinimal || (!location && !talentStr)) && (
           <p className={`text-sm leading-relaxed text-content-muted ${isMinimal ? 'mt-1' : 'mt-2'}`}>
-            {highlightText(event.description, q, accentColor)}
+            {highlightText(event.description, highlight, accentColor)}
           </p>
         )}
 

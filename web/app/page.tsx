@@ -12,10 +12,12 @@ import { SearchResults } from './components/search-results'
 import { EventCard } from './components/event-card'
 import { EventFeed } from './components/event-feed'
 import { AboutCard } from './components/about-card'
+import { TagCard } from './components/tag-card'
 import { CityPicker, type CityOption } from './components/city-picker'
 import { PageHeader } from './components/page-header'
 import { resolveLocation } from '@/lib/location'
 import { buildCityOptions } from '@/lib/cities'
+import { CATEGORY_MAP } from '@/lib/categories'
 
 export const metadata: Metadata = {
   title:       SITE_TITLE,
@@ -63,9 +65,10 @@ function getDateWindow() {
 
 interface SearchParams {
   category?: string
-  q?: string
-  lat?: string
-  lng?: string
+  q?:        string
+  tag?:      string  // set by TagCard links; distinct from q (event card tags)
+  lat?:      string
+  lng?:      string
 }
 
 export default async function DiscoverPage({
@@ -73,7 +76,7 @@ export default async function DiscoverPage({
 }: {
   searchParams: Promise<SearchParams>
 }) {
-  const { category, q, lat: latParam, lng: lngParam } = await searchParams
+  const { category, q, tag, lat: latParam, lng: lngParam } = await searchParams
 
   const location = await resolveLocation(latParam, lngParam)
   const { lat, lng } = location
@@ -89,30 +92,39 @@ export default async function DiscoverPage({
   const { data: rawCities } = await supabase.rpc('available_cities')
   const availableCities: CityOption[] = buildCityOptions(rawCities ?? [])
 
-  let eventList: EventRow[] = []
+  // Fetch the full unfiltered nearby set. q/category are applied in JS below
+  // so that topTags always reflects everything nearby, not just the filtered slice —
+  // this keeps the tag card useful for switching between vibes.
+  let baseEvents: EventRow[] = []
 
   if (!noBoardsNearby) {
-    let query = supabase
+    const { data: events, error } = await supabase
       .rpc('events_for_boards', { board_ids: nearbyBoardIds })
       .or(
         `and(date_start.lte.${thirtyDaysOut},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),date_type.in.(recurring,approximate,unknown)`
       )
-
-    if (category && category !== 'all' && !q) {
-      query = query.eq('event_category', category)
-    }
-
-    if (q) {
-      query = query.ilike('search_text', `%${q}%`)
-    }
-
-    const { data: events, error } = await query.limit(500)
+      .limit(500)
 
     if (error) {
       console.error('events_public query failed:', error)
     }
 
-    eventList = events ?? []
+    baseEvents = events ?? []
+  }
+
+  // Apply text, tag, and category filters in JS so baseEvents stays available for topTags.
+  let eventList: EventRow[] = baseEvents
+  if (q) {
+    const qLower = q.toLowerCase()
+    eventList = eventList.filter(e => e.search_text?.toLowerCase().includes(qLower))
+  }
+  if (tag) {
+    // Exact match — tag always originates from the tag cloud so we know the value precisely.
+    const tagLower = tag.toLowerCase()
+    eventList = eventList.filter(e => e.tags?.some(t => t.toLowerCase() === tagLower))
+  }
+  if (category && category !== 'all' && !q && !tag) {
+    eventList = eventList.filter(e => e.event_category === category)
   }
 
   const DATE_TYPE_PRIORITY: Record<string, number> = {
@@ -153,7 +165,8 @@ export default async function DiscoverPage({
   // (recurring, approximate, unknown) or a specific event past the 4-day window.
   // That break point is where the About card slots in.
   // Minimum position of 3 so it never appears at the very top.
-  const isFiltered = !!(q || (category && category !== 'all'))
+  // Suppressed when viewing a specific board — the context is already scoped.
+  const isFiltered = !!(q || tag || (category && category !== 'all'))
   let aboutAt = eventList.length
   if (!isFiltered) {
     const MIN_POSITION = 3
@@ -165,6 +178,30 @@ export default async function DiscoverPage({
       }
     }
   }
+
+  // Derive top tags from the full unfiltered baseEvents so the tag card always
+  // shows everything nearby — not just tags of the currently filtered slice.
+  // Category names and the current city are filtered out as redundant.
+  const CATEGORY_NAMES = new Set(Object.keys(CATEGORY_MAP))
+  const cityLower      = cityLabel?.toLowerCase() ?? null
+
+  const tagFrequency = new Map<string, number>()
+  for (const event of baseEvents) {
+    for (const tag of event.tags ?? []) {
+      const tagLower = tag.toLowerCase()
+      if (CATEGORY_NAMES.has(tagLower)) continue
+      if (cityLower && tagLower === cityLower) continue
+      tagFrequency.set(tag, (tagFrequency.get(tag) ?? 0) + 1)
+    }
+  }
+  const topTags = [...tagFrequency.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 20)
+    .map(([tag]) => tag)
+
+  // TagCard injects 5 cards after the AboutCard. Falls through to end-of-list
+  // if the feed is too short, same pattern as AboutCard.
+  const tagCardAt = aboutAt + 5
 
   return (
     <div className="min-h-screen bg-surface-page">
@@ -190,6 +227,14 @@ export default async function DiscoverPage({
             <SearchInput eventCount={eventList.length} />
           </div>
 
+          {/* Tag card below search only when navigated from the tag cloud (?tag=).
+              Event card tag clicks (?q=) don't pin it — different intent. */}
+          {tag && topTags.length >= 5 && (
+            <div className="max-w-2xl mx-auto px-4 pb-4">
+              <TagCard tags={topTags} activeTag={tag} />
+            </div>
+          )}
+
           <main className="max-w-2xl mx-auto px-4">
             {noBoardsNearby ? (
               availableCities.length > 0 ? (
@@ -211,10 +256,12 @@ export default async function DiscoverPage({
                       {eventList.flatMap((event, i) => {
                         const cards = []
                         if (!isFiltered && i === aboutAt) cards.push(<AboutCard key="__about" />)
+                        if (!isFiltered && !q && !tag && topTags.length >= 5 && i === tagCardAt) cards.push(<TagCard key="__tags" tags={topTags} />)
                         cards.push(<EventCard key={event.id} event={event} />)
                         return cards
                       })}
                       {!isFiltered && aboutAt >= eventList.length && <AboutCard key="__about" />}
+                      {!isFiltered && !q && !tag && topTags.length >= 5 && tagCardAt >= eventList.length && <TagCard key="__tags" tags={topTags} />}
                       <p className="text-center text-xs pt-4 text-content-muted">
                         {eventList.length} event{eventList.length !== 1 ? 's' : ''}
                         {!q && category && category !== 'all' ? ` · ${category}` : ''}
