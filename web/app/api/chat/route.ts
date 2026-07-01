@@ -1,9 +1,15 @@
 // app/api/chat/route.ts
 //
-// Search endpoint for the events feed. Two-step, both forced:
-//   1. Claude calls search_events (date parsing, category, free, etc.)
-//   2. We run the query, then Claude calls present_results to assign each
-//      event to a plain-language group and write one orienting line.
+// Search endpoint for the events feed.
+//
+// Vector path (when OPENAI_EMBEDDING_API_KEY is set):
+//   1. Embed the query via OpenAI text-embedding-3-small
+//   2. Call search_events_semantic RPC — DB does the concept matching
+//   3. Force present_results — Claude writes lead line and groups
+//
+// ilike fallback (no key, embed fails, or random query):
+//   1. Force search_events — Claude parses dates/filters, we run ilike
+//   2. Force present_results — Claude writes lead line and groups
 //
 // Returns JSON (not SSE): { lead, groups:[{label, event_ids}], events:{id: row} }.
 // The client renders real EventCards from `events`; `groups` only carries
@@ -21,8 +27,16 @@ import {
 } from '@/lib/types/events'
 import { type EnrichmentData } from '@/lib/types/enrichment'
 
-const ANTHROPIC_API = 'https://api.anthropic.com/v1/messages'
-const MODEL         = 'claude-haiku-4-5-20251001'
+const ANTHROPIC_API            = 'https://api.anthropic.com/v1/messages'
+const MODEL                    = 'claude-haiku-4-5-20251001'
+const OPENAI_EMBEDDING_API_KEY = process.env.OPENAI_EMBEDDING_API_KEY
+const EMBEDDING_MODEL          = 'text-embedding-3-small'
+const EMBEDDING_DIMS           = 1536
+
+// Set SKIP_PRESENT_RESULTS=true in .env.local to bypass the Claude grouping
+// call entirely — useful for testing vector search results in isolation.
+// Events render as a flat list under "More" with no lead line or groups.
+const SKIP_PRESENT_RESULTS = process.env.SKIP_PRESENT_RESULTS === 'true'
 
 const supabase = createClient<Database>(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -177,11 +191,14 @@ Your job is to INTERPRET the query and ORGANIZE results — not to narrate them.
 The user reads the real event cards; you only sort them into useful piles and \
 write one orienting line so they can land on what they want.
 
-First call search_events (parse dates and filters from the query). Then call \
-present_results to group the events and write the lead line.
+In the vector search path, results are already semantically matched — skip search_events \
+and call present_results directly with the events provided.
 
-Use the query field only for concrete words that would appear on a flyer (an act, \
-a genre, a venue). For mood, vibe, audience, or occasion queries ("fun for singles", \
+In the ilike fallback path, first call search_events (parse dates and filters from the \
+query), then call present_results.
+
+Use the query field in search_events only for concrete words that would appear on a flyer \
+(an act, a genre, a venue). For mood, vibe, audience, or occasion queries ("fun for singles", \
 "something chill", "good for kids"), pass NO query — fetch the broad upcoming set and \
 do the matching by grouping in present_results. Substring search can't find a vibe; \
 grouping can.
@@ -228,6 +245,35 @@ async function callClaude(
     }),
   })
   return { ok: res.ok, msg: await res.json() }
+}
+
+// ── OpenAI embedding ───────────────────────────────────────────────────────
+
+async function embedQuery(query: string): Promise<number[] | null> {
+  if (!OPENAI_EMBEDDING_API_KEY) return null
+  try {
+    const res = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${OPENAI_EMBEDDING_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model:      EMBEDDING_MODEL,
+        input:      query,
+        dimensions: EMBEDDING_DIMS,
+      }),
+    })
+    if (!res.ok) {
+      console.error('OpenAI embed error:', res.status, await res.text())
+      return null
+    }
+    const data = await res.json()
+    return data?.data?.[0]?.embedding ?? null
+  } catch (err) {
+    console.error('embedQuery failed:', err)
+    return null
+  }
 }
 
 // ── Tool execution ─────────────────────────────────────────────────────────
@@ -284,6 +330,63 @@ function formatForPrompt(e: EventRow, enrichment: EnrichmentData | null, random:
   return lines.join('\n')
 }
 
+// Shared enrichment fetch — used by both search paths.
+async function fetchEnrichment(rows: EventRow[]): Promise<Map<string, EnrichmentData>> {
+  const ids = rows.map(e => e.id).filter(Boolean) as string[]
+  const { data: sightings } = await supabase
+    .from('event_sightings')
+    .select('event_id, enrichment_data, sighted_at')
+    .in('event_id', ids)
+    .not('enrichment_data', 'is', null)
+    .order('sighted_at', { ascending: false })
+
+  const map = new Map<string, EnrichmentData>()
+  for (const s of sightings ?? []) {
+    if (!map.has(s.event_id)) map.set(s.event_id, s.enrichment_data as unknown as EnrichmentData)
+  }
+  return map
+}
+
+// ── Vector search path ─────────────────────────────────────────────────────
+// Calls search_events_semantic RPC, applies same date window as ilike path,
+// fetches enrichment, returns rows + formatted prompt text for present_results.
+
+function isInDateWindow(e: EventRow, today: string, windowEnd: string): boolean {
+  if (e.date_type !== 'specific') return true  // recurring/approximate/unknown always included
+  if (!e.date_start) return true
+  if (e.date_start > windowEnd) return false
+  if (e.date_end) return e.date_end >= today
+  return e.date_start >= today
+}
+
+async function executeSemanticSearch(
+  embedding: number[]
+): Promise<{ rows: EventRow[]; promptText: string }> {
+  const today     = pacificDate(0)
+  const windowEnd = pacificDate(30)
+
+  const { data, error } = await supabase.rpc('search_events_semantic', {
+    query_embedding: JSON.stringify(embedding),
+    match_threshold: 0.3,
+    match_count:     50,
+  })
+
+  if (error) {
+    console.error('search_events_semantic error:', error)
+    return { rows: [], promptText: 'Error searching events.' }
+  }
+  if (!data?.length) return { rows: [], promptText: 'No events found.' }
+
+  const rows = (data as EventRow[]).filter(e => isInDateWindow(e, today, windowEnd))
+  if (!rows.length) return { rows: [], promptText: 'No events found.' }
+
+  const enrichmentMap = await fetchEnrichment(rows)
+  const blocks = rows.map(e => formatForPrompt(e, enrichmentMap.get(e.id ?? '') ?? null, false))
+  return { rows, promptText: `Found ${rows.length} events:\n\n${blocks.join('\n\n---\n\n')}` }
+}
+
+// ── ilike search path ──────────────────────────────────────────────────────
+
 async function executeSearch(input: SearchInput): Promise<{ rows: EventRow[]; promptText: string }> {
   const today     = pacificDate(0)
   const windowEnd = input.date_to ?? pacificDate(30)
@@ -314,20 +417,7 @@ async function executeSearch(input: SearchInput): Promise<{ rows: EventRow[]; pr
     rows = shuffle(rows).slice(0, 3)
   }
 
-  // Enrichment for grouping context (touring act, venue vibe) — fetched once.
-  const ids = rows.map(e => e.id).filter(Boolean) as string[]
-  const { data: sightings } = await supabase
-    .from('event_sightings')
-    .select('event_id, enrichment_data, sighted_at')
-    .in('event_id', ids)
-    .not('enrichment_data', 'is', null)
-    .order('sighted_at', { ascending: false })
-
-  const enrichmentMap = new Map<string, EnrichmentData>()
-  for (const s of sightings ?? []) {
-    if (!enrichmentMap.has(s.event_id)) enrichmentMap.set(s.event_id, s.enrichment_data as unknown as EnrichmentData)
-  }
-
+  const enrichmentMap = await fetchEnrichment(rows)
   const blocks = rows.map(e => formatForPrompt(e, enrichmentMap.get(e.id ?? '') ?? null, !!input.random))
   return { rows, promptText: `Found ${rows.length} events:\n\n${blocks.join('\n\n---\n\n')}` }
 }
@@ -354,6 +444,38 @@ function normalizeGroups(rawGroups: unknown, validIds: Set<string>): Group[] {
     .filter((g): g is Group => Boolean(g.label) && g.event_ids.length > 0)
 }
 
+// ── Shared present_results handler ─────────────────────────────────────────
+
+async function runPresentResults(
+  rows: EventRow[],
+  promptText: string,
+  query: string,
+  messages: unknown[],
+  system: ReturnType<typeof systemPrompt>
+): Promise<{ lead: string; groups: Group[]; events: Record<string, EventRow> }> {
+  const events: Record<string, EventRow> = {}
+  for (const r of rows) {
+    if (r.id) events[r.id] = r
+  }
+  const validIds = new Set(Object.keys(events))
+
+  const { ok, msg } = await callClaude('present_results', messages, system)
+  if (!ok || !msg.content) {
+    console.error('present_results failed:', JSON.stringify(msg))
+    return { lead: '', groups: [], events }
+  }
+
+  const presentCall = msg.content.find(
+    (b): b is PresentResultsBlock => b.type === 'tool_use' && b.name === 'present_results'
+  )
+
+  return {
+    lead:   presentCall?.input.lead   ?? '',
+    groups: presentCall ? normalizeGroups(presentCall.input.groups, validIds) : [],
+    events,
+  }
+}
+
 // ── Route ──────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
@@ -366,15 +488,53 @@ export async function POST(req: NextRequest) {
   } catch {}
   if (typeof query !== 'string') return Response.json({ error: 'Bad request' }, { status: 400 })
 
-  const system       = systemPrompt(city)  // compute once per request
-  const baseMessages = [{ role: 'user', content: query || 'What is coming up?' }]
+  const system      = systemPrompt(city)  // compute once per request
+  const userMessage = query || 'What is coming up?'
 
   try {
-    // Step 1 — forced search_events
+    // ── Vector path ──────────────────────────────────────────────────────
+    // Skip for random queries — the ilike path handles shuffle + slice(0,3).
+    // For everything else, try to embed and do semantic search.
+    const isRandom = /surprise|anything|random/i.test(query)
+
+    if (!isRandom) {
+      const embedding = await embedQuery(userMessage)
+
+      if (embedding) {
+        const { rows, promptText } = await executeSemanticSearch(embedding)
+
+        if (rows.length > 0) {
+          if (SKIP_PRESENT_RESULTS) {
+            const events: Record<string, EventRow> = {}
+            for (const r of rows) { if (r.id) events[r.id] = r }
+            return Response.json({ lead: '', groups: [], events })
+          }
+          // No search_events call — go straight to present_results.
+          // Query and results combined in one user message; Claude has
+          // everything it needs to write the lead line and groups.
+          const result = await runPresentResults(rows, promptText, query, [
+            { role: 'user', content: `${userMessage}
+
+${promptText}` },
+          ], system)
+          return Response.json(result)
+        }
+        // Embedding succeeded but no results — fall through to ilike.
+        console.log('semantic search returned no results, falling back to ilike')
+      }
+    }
+
+    // ── ilike fallback ───────────────────────────────────────────────────
+    // Used when: no key, embed failed, random query, or semantic returned nothing.
+
+    const baseMessages = [{ role: 'user', content: userMessage }]
+
     const { ok: ok1, msg: msg1 } = await callClaude('search_events', baseMessages, system)
     if (!ok1) return Response.json({ error: 'Search failed.' }, { status: 502 })
 
-    const searchCall = msg1.content?.find((b): b is SearchEventsBlock => b.type === 'tool_use' && b.name === 'search_events')
+    const searchCall = msg1.content?.find(
+      (b): b is SearchEventsBlock => b.type === 'tool_use' && b.name === 'search_events'
+    )
     if (!searchCall) return Response.json({ lead: '', groups: [], events: {} })
 
     const searchInput = searchCall.input
@@ -390,36 +550,20 @@ export async function POST(req: NextRequest) {
 
     if (!rows.length) return Response.json({ lead: '', groups: [], events: {} })
 
-    // Step 2 — forced present_results
-    const { ok: ok2, msg: msg2 } = await callClaude('present_results', [
+    if (SKIP_PRESENT_RESULTS) {
+      const events: Record<string, EventRow> = {}
+      for (const r of rows) { if (r.id) events[r.id] = r }
+      return Response.json({ lead: '', groups: [], events })
+    }
+
+    const result = await runPresentResults(rows, promptText, query, [
       ...baseMessages,
       { role: 'assistant', content: msg1.content },
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: searchCall.id, content: promptText }] },
     ], system)
-    if (!ok2 || !msg2.content) {
-      console.error('present_results failed:', JSON.stringify(msg2))
-      // Fall through — groups stays empty, leftovers render under "More"
-    }
 
-    const events: Record<string, EventRow> = {}
-    for (const r of rows) {
-      if (r.id) events[r.id] = r
-    }
-    const validIds = new Set(Object.keys(events))
+    return Response.json(result)
 
-    // Default: empty groups — leftovers render under "More" automatically.
-    let lead   = ''
-    let groups: Group[] = []
-
-    const presentCall = ok2
-      ? msg2.content?.find((b): b is PresentResultsBlock => b.type === 'tool_use' && b.name === 'present_results')
-      : undefined
-    if (presentCall) {
-      lead   = presentCall.input.lead
-      groups = normalizeGroups(presentCall.input.groups, validIds)
-    }
-
-    return Response.json({ lead, groups, events })
   } catch (err) {
     console.error('search route error:', err)
     return Response.json({ error: 'Something went wrong.' }, { status: 500 })

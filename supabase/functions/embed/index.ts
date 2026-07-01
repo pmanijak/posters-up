@@ -35,7 +35,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const EMBEDDING_MODEL    = "text-embedding-3-small";
 const EMBEDDING_DIMS     = 1536;
-const MAX_EVENTS_PER_RUN = 1;
+const MAX_EVENTS_PER_RUN = 100;
 
 // ---------------------------------------------------------------------------
 // Types

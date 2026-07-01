@@ -548,6 +548,9 @@ export type Database = {
           date_type: string
           description: string | null
           embedding: string | null
+          embedding_attempt_count: number
+          embedding_attempted_at: string | null
+          embedding_status: string | null
           enrichment_attempt_count: number
           enrichment_attempted_at: string | null
           enrichment_status: string | null
@@ -597,6 +600,9 @@ export type Database = {
           date_type?: string
           description?: string | null
           embedding?: string | null
+          embedding_attempt_count?: number
+          embedding_attempted_at?: string | null
+          embedding_status?: string | null
           enrichment_attempt_count?: number
           enrichment_attempted_at?: string | null
           enrichment_status?: string | null
@@ -646,6 +652,9 @@ export type Database = {
           date_type?: string
           description?: string | null
           embedding?: string | null
+          embedding_attempt_count?: number
+          embedding_attempted_at?: string | null
+          embedding_status?: string | null
           enrichment_attempt_count?: number
           enrichment_attempted_at?: string | null
           enrichment_status?: string | null
@@ -1634,6 +1643,10 @@ export type Database = {
       geomfromewkt: { Args: { "": string }; Returns: unknown }
       gettransactionid: { Args: never; Returns: unknown }
       longtransactionsenabled: { Args: never; Returns: boolean }
+      mark_embedding_attempted: {
+        Args: { p_event_id: string }
+        Returns: undefined
+      }
       mark_enrichment_attempted: {
         Args: { p_event_id: string }
         Returns: undefined
@@ -1716,6 +1729,66 @@ export type Database = {
           duplicate_name: string
           match_type: string
         }[]
+      }
+      search_events_semantic: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+        }
+        Returns: {
+          accessibility: string[] | null
+          age_restriction: string | null
+          confidence_breakdown: Json | null
+          confidence_score: number | null
+          contact: string | null
+          content_type: string | null
+          date_end: string | null
+          date_raw: string | null
+          date_start: string | null
+          date_type: string | null
+          description: string | null
+          event_category: string | null
+          event_url: string | null
+          first_sighted_at: string | null
+          flyer_style: string | null
+          has_enrichment: boolean | null
+          id: string | null
+          is_free: boolean | null
+          is_outdoor: boolean | null
+          is_public: boolean | null
+          language: string | null
+          last_sighted_at: string | null
+          location_address: string | null
+          location_geo: unknown
+          location_name: string | null
+          masks_required: string | null
+          name: string | null
+          organization_name: string | null
+          organization_website: string | null
+          price_raw: string | null
+          recurrence_rule: string | null
+          rsvp_required: boolean | null
+          rsvp_url: string | null
+          search_text: string | null
+          sighting_count: number | null
+          tags: string[] | null
+          talent: Json | null
+          time_end: string | null
+          time_start: string | null
+          venue_accessibility: string[] | null
+          venue_address: string | null
+          venue_geo: unknown
+          venue_id: string | null
+          venue_name: string | null
+          venue_website: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "events_public"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
