@@ -215,7 +215,8 @@ export default async function DiscoverPage({
       <Suspense fallback={<FallbackState/>}>
         <FiltersProvider initialQuery={q}>
 
-          <div className="sticky top-0 z-10 bg-surface-page">
+          {/* Category bar — sticky only when the tag card is not in play */}
+          <div className={tag ? 'bg-surface-page' : 'sticky top-0 z-10 bg-surface-page'}>
             <div className="max-w-2xl mx-auto px-4 pt-2 pb-4">
               <FilterBar activeCategory={category} />
             </div>
@@ -227,11 +228,13 @@ export default async function DiscoverPage({
             <SearchInput eventCount={eventList.length} />
           </div>
 
-          {/* Tag card below search only when navigated from the tag cloud (?tag=).
-              Event card tag clicks (?q=) don't pin it — different intent. */}
+          {/* Tag card — sticky when a tag is active, replaces the category bar
+              as the primary nav element. Event card tag clicks (?q=) don't trigger this. */}
           {tag && topTags.length >= 5 && (
-            <div className="max-w-2xl mx-auto px-4 pb-4">
-              <TagCard tags={topTags} activeTag={tag} />
+            <div className="sticky top-0 z-10 bg-surface-page">
+              <div className="max-w-2xl mx-auto px-4 pb-4">
+                <TagCard tags={topTags} activeTag={tag} />
+              </div>
             </div>
           )}
 
