@@ -213,7 +213,7 @@ export default async function DiscoverPage({
       />
 
       <Suspense fallback={<FallbackState/>}>
-        <FiltersProvider initialQuery={q}>
+        <FiltersProvider initialQuery={q} city={cityLabel ?? 'Olympia, WA'}>
 
           {/* Category bar — sticky only when the tag card is not in play */}
           <div className={tag ? 'bg-surface-page' : 'sticky top-0 z-10 bg-surface-page'}>

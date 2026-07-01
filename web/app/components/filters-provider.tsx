@@ -38,9 +38,11 @@ export function useFilters() {
 
 export function FiltersProvider({
   initialQuery,
+  city = 'Olympia, WA',
   children,
 }: {
   initialQuery?: string
+  city?: string
   children: React.ReactNode
 }) {
   const router = useRouter()
@@ -121,7 +123,7 @@ export function FiltersProvider({
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q }),
+        body: JSON.stringify({ query: q, city }),
         signal: controller.signal,
       })
       const payload = await res.json()

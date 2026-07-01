@@ -77,7 +77,7 @@ function pacificDate(offsetDays = 0): string {
 const SEARCH_TOOL = {
   name: 'search_events',
   description:
-    'Search events spotted on Olympia, WA bulletin boards. Always call before answering.',
+    'Search events spotted on local bulletin boards. Always call before answering.',
   input_schema: {
     type: 'object',
     properties: {
@@ -165,9 +165,13 @@ const PRESENT_TOOL = {
 }
 
 // ── System prompt ──────────────────────────────────────────────────────────
+//
+// Static block is cached (cache_control: ephemeral) — its text must be
+// identical across requests. Per-request context (today's date, city) lives
+// in the second block so the static block stays cacheable regardless of city.
 
 const SYSTEM_PROMPT_STATIC = `You organize a local events feed for Posters Up (postersup.org), \
-which discovers events from physical bulletin boards around Olympia, WA.
+which discovers events from physical bulletin boards around your city.
 
 Your job is to INTERPRET the query and ORGANIZE results — not to narrate them. \
 The user reads the real event cards; you only sort them into useful piles and \
@@ -189,10 +193,10 @@ Grouping principles:
 - The lead line orients ("A couple of free outdoor things, plus a touring punk show"). It never says an event is good, never invents detail, never says anything is "worth your time". Any inference (touring, family-friendly) must be grounded in the event data.
 - Keep it tight — users are on mobile.`
 
-function systemPrompt() {
+function systemPrompt(city: string) {
   return [
     { type: 'text', text: SYSTEM_PROMPT_STATIC, cache_control: { type: 'ephemeral' } },
-    { type: 'text', text: `Today is ${pacificDate(0)}.` },
+    { type: 'text', text: `Today is ${pacificDate(0)}. City: ${city}.` },
   ]
 }
 
@@ -354,10 +358,15 @@ function normalizeGroups(rawGroups: unknown, validIds: Set<string>): Group[] {
 
 export async function POST(req: NextRequest) {
   let query = ''
-  try { query = (await req.json()).query ?? '' } catch {}
+  let city  = 'Olympia, WA'
+  try {
+    const body = await req.json()
+    query = body.query ?? ''
+    city  = body.city  ?? 'Olympia, WA'
+  } catch {}
   if (typeof query !== 'string') return Response.json({ error: 'Bad request' }, { status: 400 })
 
-  const system       = systemPrompt()  // compute once per request
+  const system       = systemPrompt(city)  // compute once per request
   const baseMessages = [{ role: 'user', content: query || 'What is coming up?' }]
 
   try {
