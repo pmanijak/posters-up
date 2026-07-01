@@ -1368,6 +1368,8 @@ export type Database = {
         Returns: {
           distance_m: number
           geo_city: string
+          geo_country: string
+          geo_region: string
           id: string
         }[]
       }

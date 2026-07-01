@@ -85,7 +85,12 @@ export default async function DiscoverPage({
 
   const { data: nearbyBoards } = await supabase.rpc('boards_near', { lat, lng })
   const nearbyBoardIds = (nearbyBoards ?? []).map((b: { id: string }) => b.id)
-  const cityLabel      = (nearbyBoards ?? [])[0]?.geo_city ?? null
+  
+  const nearestBoard  = (nearbyBoards ?? [])[0]
+  const cityLabel     = nearestBoard?.geo_city ?? null
+  const cityForSearch = nearestBoard?.geo_city && nearestBoard?.geo_region
+    ? `${nearestBoard.geo_city}, ${nearestBoard.geo_region}`
+    : 'Olympia, WA'
 
   const noBoardsNearby = nearbyBoardIds.length === 0
 
@@ -213,7 +218,7 @@ export default async function DiscoverPage({
       />
 
       <Suspense fallback={<FallbackState/>}>
-        <FiltersProvider initialQuery={q} city={cityLabel ?? 'Olympia, WA'}>
+        <FiltersProvider initialQuery={q} city={cityForSearch}>
 
           {/* Category bar — sticky only when the tag card is not in play */}
           <div className={tag ? 'bg-surface-page' : 'sticky top-0 z-10 bg-surface-page'}>
