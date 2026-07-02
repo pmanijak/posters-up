@@ -180,26 +180,46 @@ async function callClaude(
 }
 
 // ── Retrieval ────────────────────────────────────────────────────────────────
-// The full active, in-window set. Recurring / approximate / unknown always
-// included regardless of date. No limit — at current corpus size the whole set
-// fits comfortably in context, and Claude needs to see everything to group well.
+// Scoped to boards near the user, then filtered to the in-window set. Recurring
+// / approximate / unknown always included regardless of date. No further limit
+// — at current per-city corpus size the whole scoped set fits comfortably in
+// context, and Claude needs to see everything to group well.
+//
+// Scoping matters even at single-city scale: events_public alone has no city
+// or geo column (see ARCHITECTURE.md — city scaling is coordinate-based, not a
+// schema column), so an unscoped query returns every active event system-wide.
+// That's invisible today with one city live, but breaks silently the moment a
+// second city exists — a Tacoma search would surface Olympia events with no
+// way to tell they're not local. boardIds mirrors what the main feed
+// (app/page.tsx) already resolves via boards_near() and passes to
+// events_for_boards() — same scoping mechanism, reused here.
 
-async function fetchUpcoming(): Promise<EventRow[]> {
+async function fetchUpcoming(boardIds: string[]): Promise<EventRow[]> {
+  if (!boardIds.length) return []
+
+  const { data, error } = await supabase.rpc('events_for_boards', { board_ids: boardIds })
+  if (error) { console.error('events_for_boards error:', error); return [] }
+
   const today     = pacificDate(0)
   const windowEnd = pacificDate(WINDOW_DAYS)
 
-  const { data, error } = await supabase
-    .from('events_public')
-    .select('*')
-    .or(
-      `and(date_start.lte.${windowEnd},or(date_end.gte.${today},and(date_end.is.null,date_start.gte.${today}))),` +
-      `date_type.in.(recurring,approximate,unknown)`
-    )
-    .order('date_start', { ascending: true, nullsFirst: false })
-    .order('confidence_score', { ascending: false })
+  // events_for_boards returns SETOF events_public with no date filtering —
+  // apply the same in-window logic here that the direct query used to do.
+  const inWindow = (e: EventRow): boolean => {
+    if (e.date_type !== 'specific') return true
+    if (!e.date_start) return true
+    if (e.date_start > windowEnd) return false
+    return e.date_end ? e.date_end >= today : e.date_start >= today
+  }
 
-  if (error) { console.error('fetchUpcoming error:', error); return [] }
-  return data ?? []
+  return (data ?? [])
+    .filter(inWindow)
+    .sort((a, b) => {
+      const da = a.date_start ?? '9999-99-99'
+      const db = b.date_start ?? '9999-99-99'
+      if (da !== db) return da.localeCompare(db)
+      return (b.confidence_score ?? 0) - (a.confidence_score ?? 0)
+    })
 }
 
 // ── Formatting ───────────────────────────────────────────────────────────────
@@ -305,12 +325,14 @@ function normalizeGroups(rawGroups: unknown, validIds: Set<string>): Group[] {
 // ── Route ──────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  let query = ''
-  let city  = 'Olympia, WA'
+  let query     = ''
+  let city      = 'Olympia, WA'
+  let boardIds: string[] = []
   try {
     const body = await req.json()
-    query = body.query ?? ''
-    city  = body.city  ?? 'Olympia, WA'
+    query    = body.query ?? ''
+    city     = body.city  ?? 'Olympia, WA'
+    boardIds = Array.isArray(body.boardIds) ? body.boardIds.filter((id: unknown) => typeof id === 'string') : []
   } catch {}
   if (typeof query !== 'string') return Response.json({ error: 'Bad request' }, { status: 400 })
 
@@ -319,7 +341,10 @@ export async function POST(req: NextRequest) {
   const isRandom    = /surprise|anything|random/i.test(query)
 
   try {
-    let rows = await fetchUpcoming()
+    // No nearby boards (e.g. client hasn't resolved location yet) → nothing to
+    // search. Matches the main feed's noBoardsNearby state rather than falling
+    // back to an unscoped, system-wide query.
+    let rows = await fetchUpcoming(boardIds)
     if (!rows.length) return Response.json({ lead: '', groups: [], events: {} })
 
     // Random / "surprise me": shuffle and take a few. Buzz signal suppressed

@@ -39,13 +39,14 @@ export function useFilters() {
 export function FiltersProvider({
   initialQuery,
   city = 'Olympia, WA',
+  nearbyBoardIds = [],
   children,
 }: {
   initialQuery?: string
   city?: string
+  nearbyBoardIds?: string[]
   children: React.ReactNode
-}) {
-  const router = useRouter()
+}) {  const router = useRouter()
   const searchParams = useSearchParams()
   const [query, setQuery] = useState(initialQuery ?? '')
   const [hasInterpretedResults, setHasInterpretedResults] = useState(false)
@@ -123,7 +124,7 @@ export function FiltersProvider({
       const res = await fetch('/api/chat-v2', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, city }),
+        body: JSON.stringify({ query: q, city, boardIds: nearbyBoardIds }),
         signal: controller.signal,
       })
       const payload = await res.json()
