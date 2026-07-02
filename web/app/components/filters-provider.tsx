@@ -120,7 +120,7 @@ export function FiltersProvider({
       setPins(p => p + ' ' + pick())
     }, 1000)
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch('/api/chat-v2', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: q, city }),
