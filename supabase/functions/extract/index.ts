@@ -613,6 +613,42 @@ async function runExtraction(
       }
     }
 
+    // ── Talent dedup ────────────────────────────────────────────────────────
+    // Run after all items are written so the pass sees the full extraction.
+    // v2 (see migration_run_talent_dedup_pass_v2.sql): p_dry_run used to
+    // apply to both tiers uniformly, which meant the previous
+    // { dry_run: false } call here was silently running the
+    // name_similarity tier live too -- that tier has zero corroborating
+    // signal beyond a 0.85 string-similarity bar and was always meant to
+    // require human review before merging. Only same_event (co-occurrence
+    // on the same event corroborates it) is safe to run unattended.
+    const { error: dedupError } = await supabase.rpc("run_talent_dedup_pass", {
+      p_run_same_event: true,
+      p_run_name_similarity: false,
+    });
+    if (dedupError) {
+      console.warn("run_talent_dedup_pass failed:", dedupError.message);
+    }
+
+    // Field reconciliation + auto-split.
+    // Confidence-weighted plurality vote on name/date_start/location_name
+    // across sightings. Talent/date/location corroboration (see
+    // migration_run_field_reconciliation_pass_v5.sql) gates a safe
+    // automatic split when clustering finds 2+ well-supported, genuinely
+    // unrelated name groups -- those three signals exist specifically
+    // because earlier versions of this pass, run against real data, either
+    // missed a false merge (top-2-bucket comparison alone) or nearly split
+    // a real event in half (name-clustering without a same-event
+    // corroboration check). Anything the gates can't confidently resolve
+    // files a pending 'possible_false_merge' report in event_reports for
+    // human review instead of guessing.
+    const { error: reconcileError } = await supabase.rpc("run_field_reconciliation_pass", {
+      p_dry_run: false,
+    });
+    if (reconcileError) {
+      console.warn("run_field_reconciliation_pass failed:", reconcileError.message);
+    }
+
     // ── Mark complete ───────────────────────────────────────────────────────
     await supabase
       .from("photos")
