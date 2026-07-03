@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase'
 import { CATEGORY_MAP, categoryColor } from '@/lib/categories'
@@ -36,7 +35,20 @@ interface SightingRow {
   } | null
 }
 
-type ExtractionStatus = 'pending' | 'complete' | 'failed'
+type JobStatus = 'queued' | 'uploading' | 'extracting' | 'complete' | 'failed'
+
+interface JobState {
+  id:              string
+  file:            File
+  preview:         string        // object URL; revoked on reset/unmount
+  status:          JobStatus
+  progress:        number        // 0–100; drives the per-job progress bar
+  submitResult:    SubmitResult | null
+  sightings:       SightingRow[]
+  extractionError: string | null
+  uploadError:     string | null
+  warnings:        string[]
+}
 
 // ── Supabase client ────────────────────────────────────────────────────────
 
@@ -65,8 +77,7 @@ async function resizeImage(file: File, maxDimension = 2400): Promise<Blob> {
 // A contributor doesn't care which dedup tier matched. Two things matter to
 // them: did they add something new, or confirm something still posted? Both are
 // valuable — a match is a fresh sighting that bumps last_seen_at and confidence.
-// Collapses null / 'none' / 'new' → New; every other tier (url, talent_anchor,
-// fuzzy, location_anchor) → Still posted.
+// Collapses null / 'none' / 'new' → New; every other tier → Still posted.
 function contributionBadge(matchType: string | null) {
   const isNew = !matchType || matchType === 'new' || matchType === 'none'
   return isNew ? (
@@ -137,59 +148,13 @@ function progressMessage(progress: number): string {
   return PROGRESS_MESSAGES[idx]
 }
 
-// ── useProgress ────────────────────────────────────────────────────────────
-
-// Advances linearly from 0 to 95 over 75 seconds while active.
-// Jumps to 100 when complete() is called.
-function useProgress(active: boolean) {
-  const [progress, setProgress] = useState(0)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  useEffect(() => {
-    if (active) {
-      const duration = 75_000
-      const target   = 95
-      const tick     = 250
-      const step     = (target / duration) * tick
-
-      intervalRef.current = setInterval(() => {
-        setProgress(p => {
-          const next = p + step
-          return next >= target ? target : next
-        })
-      }, tick)
-    } else {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-      }
-    }
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [active])
-
-  function complete() {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
-    setProgress(100)
-  }
-
-  function reset() {
-    setProgress(0)
-  }
-
-  return { progress, complete, reset }
-}
+// Progress bar: animate to 95% over 75 s while extracting, jump to 100 on complete.
+const PROGRESS_DURATION_MS = 75_000
+const PROGRESS_TARGET      = 95
 
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
-  const router = useRouter()
-
   // Auth
   const [user, setUser]             = useState<User | null>(null)
   const [loading, setLoading]       = useState(true)
@@ -199,39 +164,170 @@ export default function UploadPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError]           = useState<string | null>(null)
 
-  // Upload
-  const [uploading, setUploading]       = useState(false)
-  // Lazy initializer reads ?photo and ?board from the URL on first render,
-  // restoring the results panel when the user navigates back from an event page.
-  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(() => {
-    if (typeof window === 'undefined') return null
-    const params = new URLSearchParams(window.location.search)
-    const photoId = params.get('photo')
-    const boardId = params.get('board')
-    if (!photoId) return null
-    return { success: true, photo_id: photoId, board_id: boardId }
-  })
-  // Incremented on reset so the file input remounts and accepts the same file again.
-  const [uploadKey, setUploadKey]       = useState(0)
+  // Photo queue
+  const [jobs, setJobs] = useState<JobState[]>([])
+  const processingRef   = useRef(false)  // prevents double-starts; guards the queue useEffect
+  const mountedRef      = useRef(true)   // guards setJobs calls after unmount
+  const fileInputRef    = useRef<HTMLInputElement>(null)
 
-  // Extraction polling
-  const [extractionStatus, setExtractionStatus] = useState<ExtractionStatus | null>(null)
-  const [sightings, setSightings]               = useState<SightingRow[]>([])
-  const [extractionError, setExtractionError]   = useState<string | null>(null)
+  // Board details — only shown for single-photo uploads (see note below jobs.length check).
+  // When a board_id comes back the form pre-populates from whatever the DB already has.
+  const [lastBoardId, setLastBoardId]                             = useState<string | null>(null)
+  const [locationName, setLocationName]                           = useState('')
+  const [description, setDescription]                             = useState('')
+  const [requiresEntryToPhotograph, setRequiresEntryToPhotograph] = useState<boolean | null>(null)
+  const [requiresEntryToPost, setRequiresEntryToPost]             = useState<boolean | null>(null)
+  const [submittingBoard, setSubmittingBoard]                     = useState(false)
+  const [boardSubmitted, setBoardSubmitted]                       = useState(false)
+  const [boardError, setBoardError]                               = useState<string | null>(null)
 
-  // Progress bar — active while extraction is pending, jumps to 100 on complete
-  const { progress, complete: completeProgress, reset: resetProgress } = useProgress(
-    extractionStatus === 'pending'
-  )
+  // Merges a partial patch into one job by id.
+  function updateJob(id: string, patch: Partial<JobState>) {
+    if (!mountedRef.current) return
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, ...patch } : j))
+  }
 
-  // Board details submission
-  const [locationName, setLocationName]                               = useState('')
-  const [description, setDescription]                                 = useState('')
-  const [requiresEntryToPhotograph, setRequiresEntryToPhotograph]     = useState<boolean | null>(null)
-  const [requiresEntryToPost, setRequiresEntryToPost]                 = useState<boolean | null>(null)
-  const [submittingBoard, setSubmittingBoard]                         = useState(false)
-  const [boardSubmitted, setBoardSubmitted]                           = useState(false)
-  const [boardError, setBoardError]                                   = useState<string | null>(null)
+  // Full pipeline for one photo: EXIF → resize → upload → extract Edge Function → poll.
+  // Drives the job's status and progress directly via updateJob.
+  // Sets processingRef.current = false on all exit paths so the queue useEffect
+  // picks up the next queued job.
+  async function processJob(job: JobState) {
+    if (!mountedRef.current) { processingRef.current = false; return }
+
+    // ── Phase 1: upload ──────────────────────────────────────────────────
+
+    updateJob(job.id, { status: 'uploading', progress: 0 })
+
+    let submitResult: SubmitResult | null = null
+
+    try {
+      const [gps, exifData] = await Promise.all([
+        exifr.gps(job.file).catch(() => null),
+        exifr.parse(job.file, ['DateTimeOriginal']).catch(() => null),
+      ])
+
+      const lat          = gps?.latitude  ?? null
+      const lng          = gps?.longitude ?? null
+      const capture_date = exifData?.DateTimeOriginal
+        ? new Date(exifData.DateTimeOriginal).toISOString()
+        : null
+
+      const resized = await resizeImage(job.file)
+
+      const { data: { user: authUser } } = await supabase.auth.getUser()
+      const path = `${authUser!.id}/${Date.now()}-${job.file.name}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('photos-raw')
+        .upload(path, resized)
+      if (uploadError) throw uploadError
+
+      const { data: { session } } = await supabase.auth.getSession()
+
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/extract`,
+        {
+          method:  'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Bearer ${session?.access_token}`,
+          },
+          body: JSON.stringify({ photo_path: path, lat, lng, capture_date }),
+        }
+      )
+
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Upload failed')
+
+      submitResult = data as SubmitResult
+
+      updateJob(job.id, {
+        status:       'extracting',
+        progress:     0,
+        submitResult,
+        warnings:     submitResult.warnings ?? [],
+      })
+
+      if (submitResult.board_id) setLastBoardId(submitResult.board_id)
+
+    } catch (err: unknown) {
+      if (!mountedRef.current) return
+      updateJob(job.id, {
+        status:      'failed',
+        uploadError: err instanceof Error ? err.message : 'Upload failed',
+      })
+      processingRef.current = false
+      return
+    }
+
+    // ── Phase 2: poll for extraction ─────────────────────────────────────
+
+    if (!submitResult?.photo_id) {
+      // extract didn't return a photo_id — nothing to poll
+      updateJob(job.id, { status: 'complete', progress: 100 })
+      processingRef.current = false
+      return
+    }
+
+    const photoId = submitResult.photo_id
+
+    // Animate 0 → 95% over 75 s while we wait for the extraction worker.
+    const startTime = Date.now()
+    const progressInterval = setInterval(() => {
+      if (!mountedRef.current) { clearInterval(progressInterval); return }
+      const elapsed = Date.now() - startTime
+      const frac    = Math.min(elapsed / PROGRESS_DURATION_MS, 1)
+      updateJob(job.id, { progress: Math.round(frac * PROGRESS_TARGET) })
+    }, 250)
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+
+      while (mountedRef.current) {
+        await new Promise(r => setTimeout(r, 3000))
+        if (!mountedRef.current) break
+
+        let res: Response
+        try {
+          res = await fetch(`/api/photos/${photoId}/sightings`, {
+            headers: { Authorization: `Bearer ${session?.access_token}` },
+          })
+        } catch {
+          // Network hiccup — keep polling
+          continue
+        }
+
+        if (!res.ok) break
+
+        const data = await res.json()
+
+        if (data.sightings) updateJob(job.id, { sightings: data.sightings })
+
+        if (data.extraction_status === 'complete') {
+          clearInterval(progressInterval)
+          updateJob(job.id, {
+            status:    'complete',
+            progress:  100,
+            sightings: data.sightings ?? [],
+          })
+          break
+        } else if (data.extraction_status === 'failed') {
+          clearInterval(progressInterval)
+          updateJob(job.id, {
+            status:          'failed',
+            extractionError: data.extraction_error ?? 'Extraction failed',
+          })
+          break
+        }
+      }
+    } finally {
+      // processingRef must be cleared before the final setJobs triggers the
+      // queue useEffect. async/finally runs synchronously before React flushes
+      // the queued render, so the guard is already false when the effect fires.
+      clearInterval(progressInterval)
+      processingRef.current = false
+    }
+  }
 
   // Auth check on mount.
   useEffect(() => {
@@ -241,15 +337,39 @@ export default function UploadPage() {
     })
   }, [])
 
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
+  // Sequential queue processor. Fires whenever `jobs` changes; starts the next
+  // queued job if nothing is currently running. `processingRef` prevents double-starts:
+  // setJobs inside processJob triggers this effect while processJob is still awaiting,
+  // and the guard bails out. When processJob finishes it sets processingRef.current = false
+  // synchronously before the final setJobs triggers a re-render, so the next invocation
+  // of this effect correctly sees it as free.
+  useEffect(() => {
+    if (processingRef.current) return
+    const next = jobs.find(j => j.status === 'queued')
+    if (!next) return
+    processingRef.current = true
+    // setTimeout defers processJob out of the synchronous effect body,
+    // avoiding the "setState inside effect" linter warning. The guard above
+    // is already set, so a re-render between here and the next tick is safe.
+    setTimeout(() => void processJob(next), 0)
+    // processJob doesn't close over `jobs` — safe to omit from deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs])
+
   // When a board_id comes back, fetch its existing values to pre-populate
   // the board details form and reset submission state.
   // All setState calls are in .then() to satisfy react-hooks/set-state-in-effect.
   useEffect(() => {
-    if (!submitResult?.board_id) return
+    if (!lastBoardId) return
     supabase
       .from('boards')
       .select('location_name, description')
-      .eq('id', submitResult.board_id)
+      .eq('id', lastBoardId)
       .maybeSingle()
       .then(({ data }) => {
         setBoardSubmitted(false)
@@ -259,75 +379,41 @@ export default function UploadPage() {
         setLocationName(data?.location_name ?? '')
         setDescription(data?.description ?? '')
       })
-  }, [submitResult?.board_id])
+  }, [lastBoardId])
 
-  // Poll /api/photos/[id]/sightings every 3 seconds until complete or failed.
-  // State resets are inside poll() before the first await to satisfy
-  // react-hooks/set-state-in-effect.
-  useEffect(() => {
-    const photoId = submitResult?.photo_id
-    if (!photoId) return
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    if (!files.length) return
 
-    let cancelled = false
+    const newJobs: JobState[] = files.map(file => ({
+      id:              crypto.randomUUID(),
+      file,
+      preview:         URL.createObjectURL(file),
+      status:          'queued',
+      progress:        0,
+      submitResult:    null,
+      sightings:       [],
+      extractionError: null,
+      uploadError:     null,
+      warnings:        [],
+    }))
 
-    async function poll() {
-      setExtractionStatus('pending')
-      setSightings([])
-      setExtractionError(null)
+    setJobs(prev => [...prev, ...newJobs])
+    e.target.value = '' // reset so the same file can be re-selected
+  }
 
-      const { data: { session } } = await supabase.auth.getSession()
-
-      while (!cancelled) {
-        await new Promise(r => setTimeout(r, 3000))
-        if (cancelled) break
-
-        let res: Response
-        try {
-          res = await fetch(`/api/photos/${photoId}/sightings`, {
-            headers: { Authorization: `Bearer ${session?.access_token}` },
-          })
-        } catch {
-          // Network error — keep trying
-          continue
-        }
-
-        if (!res.ok) break
-
-        const data = await res.json()
-
-        if (data.sightings) setSightings(data.sightings)
-
-        if (data.extraction_status === 'complete') {
-          completeProgress()
-          setExtractionStatus('complete')
-          break
-        } else if (data.extraction_status === 'failed') {
-          setExtractionError(data.extraction_error ?? 'Extraction failed')
-          setExtractionStatus('failed')
-          break
-        }
-      }
-    }
-
-    poll()
-    return () => { cancelled = true }
-  }, [submitResult?.photo_id])
-
-  // Resets all upload and extraction state so the contributor can submit another photo.
+  // Resets all queue and board-form state so the contributor can start a new session.
   function handleReset() {
-    resetProgress()
-    setSubmitResult(null)
-    setExtractionStatus(null)
-    setSightings([])
-    setExtractionError(null)
+    jobs.forEach(j => URL.revokeObjectURL(j.preview))
+    setJobs([])
+    setLastBoardId(null)
     setBoardSubmitted(false)
     setBoardError(null)
     setLocationName('')
     setDescription('')
     setRequiresEntryToPhotograph(null)
     setRequiresEntryToPost(null)
-    setUploadKey(k => k + 1)
-    router.replace(window.location.pathname)
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   async function sendOtp() {
@@ -360,69 +446,8 @@ export default function UploadPage() {
     setSubmitting(false)
   }
 
-  async function upload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file || !user) return
-
-    resetProgress()
-    setUploading(true)
-    setError(null)
-    setSubmitResult(null)
-    setExtractionStatus(null)
-    setSightings([])
-    setExtractionError(null)
-
-    try {
-      const [gps, exifData] = await Promise.all([
-        exifr.gps(file).catch(() => null),
-        exifr.parse(file, ['DateTimeOriginal']).catch(() => null),
-      ])
-
-      const lat          = gps?.latitude  ?? null
-      const lng          = gps?.longitude ?? null
-      const capture_date = exifData?.DateTimeOriginal
-        ? new Date(exifData.DateTimeOriginal).toISOString()
-        : null
-
-      const resized = await resizeImage(file)
-
-      const path = `${user.id}/${Date.now()}-${file.name}`
-      const { error: uploadError } = await supabase.storage
-        .from('photos-raw')
-        .upload(path, resized)
-
-      if (uploadError) throw uploadError
-
-      const { data: { session } } = await supabase.auth.getSession()
-
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/extract`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            'Authorization': `Bearer ${session?.access_token}`,
-          },
-          body: JSON.stringify({ photo_path: path, lat, lng, capture_date }),
-        }
-      )
-
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Upload failed')
-      setSubmitResult(data as SubmitResult)
-      // Persist photo + board IDs in the URL so back-navigation restores this panel.
-      const qs = new URLSearchParams({ photo: data.photo_id ?? '' })
-      if (data.board_id) qs.set('board', data.board_id)
-      router.replace(`?${qs}`)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Upload failed')
-    } finally {
-      setUploading(false)
-    }
-  }
-
   async function submitBoardDetails() {
-    if (!submitResult?.board_id) return
+    if (!lastBoardId) return
 
     const trimmedName = locationName.trim()
     const trimmedDesc = description.trim()
@@ -434,7 +459,7 @@ export default function UploadPage() {
     const { error } = await supabase
       .from('board_submissions')
       .insert({
-        board_id:                     submitResult.board_id,
+        board_id:                     lastBoardId,
         location_name:                trimmedName || null,
         description:                  trimmedDesc || null,
         requires_entry_to_photograph: requiresEntryToPhotograph,
@@ -446,11 +471,26 @@ export default function UploadPage() {
     else setBoardSubmitted(true)
   }
 
+  // ── Derived ──────────────────────────────────────────────────────────────
+
+  const activeJob  = jobs.find(j => j.status === 'uploading' || j.status === 'extracting')
+  const anySuccess = jobs.some(j => j.status === 'complete')
+  const allSettled = jobs.length > 0 && jobs.every(j => j.status === 'complete' || j.status === 'failed')
+  const doneCount  = jobs.filter(j => j.status === 'complete' || j.status === 'failed').length
+
+  // Board form is only meaningful for a single-photo upload: the contributor is
+  // presumably at or near that one board. Multi-photo sessions are typically a
+  // downtown walkabout covering many different boards, so a single form at the
+  // end would be ambiguous and not worth filling in.
+  const showBoardForm = jobs.length === 1 && anySuccess && lastBoardId
+
   const boardDetailsReady =
     locationName.trim().length > 0 ||
     description.trim().length > 0 ||
     requiresEntryToPhotograph !== null ||
     requiresEntryToPost !== null
+
+  // ── Loading + auth states ─────────────────────────────────────────────────
 
   if (loading) return (
     <div className="min-h-screen bg-surface-page" />
@@ -539,6 +579,8 @@ export default function UploadPage() {
     </div>
   )
 
+  // ── Authenticated ─────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-surface-page">
 
@@ -563,138 +605,109 @@ export default function UploadPage() {
 
       <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
 
-        {/* Upload — hidden once a result comes back */}
-        {!submitResult && (
+        {/* ── File picker — shown before any photos are queued ── */}
+        {jobs.length === 0 && (
           <div className="bg-surface-card rounded-sm border border-edge p-6 space-y-4">
             <p className="text-sm text-content-secondary">
               Photograph a bulletin board and submit it. We'll read the GPS from your
               photo to place the board on the map — make sure your camera has location enabled.
+              You can select multiple photos at once.
             </p>
 
-            <label className={[
-              'flex items-center justify-center w-full h-24 rounded border border-dashed border-edge-subtle text-sm cursor-pointer transition-colors',
-              uploading
-                ? 'text-content-muted cursor-not-allowed'
-                : 'text-content-muted hover:border-content-muted hover:text-content-secondary',
-            ].join(' ')}>
-              {uploading ? 'Uploading…' : 'Choose a photo'}
+            <label className="flex items-center justify-center w-full h-24 rounded border border-dashed border-edge-subtle text-sm cursor-pointer transition-colors text-content-muted hover:border-content-muted hover:text-content-secondary">
+              Choose photos
               <input
-                key={uploadKey}
+                ref={fileInputRef}
                 type="file"
                 accept="image/*"
-                onChange={upload}
-                disabled={uploading}
+                multiple
+                onChange={handleFileChange}
                 className="sr-only"
               />
             </label>
-
-            {/* Upload spinner — just for the fast storage upload step */}
-            {uploading && (
-              <div className="h-1 w-full bg-surface-raised rounded-full overflow-hidden">
-                <div className="h-full w-full bg-content-secondary rounded-full animate-pulse" />
-              </div>
-            )}
           </div>
         )}
 
-        {/* Upload error */}
-        {error && (
-          <p className="text-sm text-red-400">{error}</p>
-        )}
-
-        {/* Post-submit panel */}
-        {submitResult && (
+        {/* ── Queue panel — shown once photos are added ── */}
+        {jobs.length > 0 && (
           <div className="bg-surface-card rounded-sm border border-edge divide-y divide-edge">
 
-            {/* Header */}
-            <div className="px-4 py-3 flex items-center justify-between">
-              <span className="text-sm text-content-primary font-medium">Photo uploaded</span>
-              {submitResult.board_id
-                ? <span className="text-xs text-content-muted">
-                    {locationName ? `Saved to ${locationName}` : 'Board saved'}
-                  </span>
-                : <span className="text-xs text-content-muted">No GPS — board location not recorded</span>
-              }
-            </div>
+            {/* Thumbnail strip + queue status — only shown for multi-photo */}
+            {jobs.length > 1 && (
+              <div className="px-4 py-3 space-y-3">
+                <div className="flex gap-2 flex-wrap items-center">
+                  {jobs.map(job => (
+                    <JobThumbnail key={job.id} job={job} />
+                  ))}
 
-            {/* Fast-path warnings */}
-            {submitResult.warnings && submitResult.warnings.length > 0 && (
-              <div className="px-4 py-3 space-y-1">
-                {submitResult.warnings.map((w, i) => (
-                  <p key={i} className="text-xs text-amber-400">⚠ {w}</p>
-                ))}
+                  {/* Add more photos while the queue is running or after it finishes */}
+                  <label
+                    className="w-12 h-12 flex items-center justify-center rounded border-2 border-dashed border-edge-subtle text-content-muted text-xl cursor-pointer transition-colors hover:border-content-muted hover:text-content-secondary"
+                    title="Add more photos"
+                  >
+                    +
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleFileChange}
+                      className="sr-only"
+                    />
+                  </label>
+                </div>
+
+                {!allSettled && (
+                  <p className="text-xs text-content-muted">
+                    {activeJob
+                      ? `Processing photo ${doneCount + 1} of ${jobs.length}…`
+                      : `${doneCount} of ${jobs.length} done`
+                    }
+                  </p>
+                )}
               </div>
             )}
 
-            {/* Extraction progress — visible while Claude is working */}
-            {(extractionStatus === 'pending' || extractionStatus === 'complete') && (
+            {/* Progress bar — shown for the active job only.
+                'uploading' uses animate-pulse (fast, indeterminate);
+                'extracting' uses the 0→95 linear animation. */}
+            {activeJob && (
               <div className="px-4 py-3 space-y-1.5">
                 <div className="h-1 w-full bg-surface-raised rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-content-secondary rounded-full"
-                    style={{ width: `${progress}%`, transition: 'width 0.25s linear' }}
-                  />
+                  {activeJob.status === 'uploading' ? (
+                    <div className="h-full w-full bg-content-secondary rounded-full animate-pulse" />
+                  ) : (
+                    <div
+                      className="h-full bg-content-secondary rounded-full"
+                      style={{ width: `${activeJob.progress}%`, transition: 'width 0.25s linear' }}
+                    />
+                  )}
                 </div>
                 <p className="text-xs text-content-muted">
-                  {extractionStatus === 'complete'
-                    ? `Found ${sightings.length} poster${sightings.length !== 1 ? 's' : ''} on this board`
-                    : progressMessage(progress)
+                  {activeJob.status === 'uploading'
+                    ? 'Uploading…'
+                    : progressMessage(activeJob.progress)
                   }
                 </p>
               </div>
             )}
 
-            {extractionStatus === 'failed' && (
-              <div className="px-4 py-3">
-                <p className="text-xs text-red-400">Extraction failed: {extractionError}</p>
-              </div>
-            )}
+            {/* Per-job results — appear as each photo completes or fails */}
+            {jobs
+              .filter(j => j.status === 'complete' || j.status === 'failed')
+              .map((job, idx) => (
+                <JobResult
+                  key={job.id}
+                  job={job}
+                  jobNumber={idx + 1}
+                  totalJobs={jobs.length}
+                />
+              ))
+            }
 
-            {/* Sightings list — grouped by category, appears when extraction completes */}
-            {extractionStatus === 'complete' && sightings.length > 0 && (
-              <div className="px-4 py-3 space-y-4">
-                {groupByCategory(sightings).map(({ category, label, items }) => (
-                  <div key={category ?? '__uncategorized__'} className="space-y-1.5">
-
-                    {/* Category header — colored dot + label */}
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className="w-1.5 h-1.5 rounded-full shrink-0"
-                        style={{ backgroundColor: category ? categoryColor(category) : 'var(--color-content-muted)' }}
-                      />
-                      <span className="text-xs font-medium text-content-secondary uppercase tracking-wide">
-                        {label}
-                      </span>
-                    </div>
-
-                    <div className="space-y-2">
-                      {items.map((s) => {
-                        const hardToRead = s.extraction_confidence < 0.5
-                        return (
-                          <div key={s.id} className="space-y-0.5 pl-3">
-                            <div className="flex items-center justify-between gap-4">
-                              <Link
-                                href={`/events/${s.events?.id}`}
-                                className="text-sm text-content-secondary hover:text-content-primary truncate"
-                              >
-                                {s.events?.name ?? '(unnamed)'}
-                              </Link>
-                              {contributionBadge(s.match_type)}
-                            </div>
-                            {hardToRead && (
-                              <p className="text-xs text-content-muted">Hard to read — a sharper photo would help.</p>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Board details — shown after extraction completes, when a board was found */}
-            {extractionStatus === 'complete' && submitResult.board_id && (
+            {/* Board details — single-photo only. Multi-photo sessions are typically
+                a walkabout covering many different boards, so the form would be
+                ambiguous. The board_id is stored in job.submitResult for future use. */}
+            {showBoardForm && (
               <div className="px-4 py-5 space-y-5">
 
                 <div>
@@ -807,8 +820,8 @@ export default function UploadPage() {
               </div>
             )}
 
-            {/* Submit another — shown when extraction is done */}
-            {extractionStatus === 'complete' && (
+            {/* Submit another session */}
+            {allSettled && (
               <div className="px-4 py-4 flex justify-center">
                 <button
                   onClick={handleReset}
@@ -821,7 +834,121 @@ export default function UploadPage() {
 
           </div>
         )}
+
       </main>
+    </div>
+  )
+}
+
+// ── Sub-components ─────────────────────────────────────────────────────────
+
+// Small thumbnail in the strip with a status indicator overlay.
+// Only rendered in the multi-photo thumbnail strip.
+function JobThumbnail({ job }: { job: JobState }) {
+  const ringColor =
+    job.status === 'uploading' || job.status === 'extracting' ? 'ring-content-secondary' :
+    job.status === 'complete'                                  ? 'ring-green-600/70' :
+    job.status === 'failed'                                    ? 'ring-red-500/70' :
+    'ring-transparent'
+
+  return (
+    <div
+      className={`relative w-12 h-12 rounded overflow-hidden shrink-0 ring-2 ${ringColor}`}
+      title={job.file.name}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={job.preview} alt="" className="w-full h-full object-cover" />
+
+      <div className={`absolute inset-0 flex items-center justify-center ${job.status === 'queued' ? 'bg-black/40' : ''}`}>
+        {job.status === 'queued' && (
+          <span className="w-1.5 h-1.5 rounded-full bg-white/80" />
+        )}
+        {job.status === 'failed' && (
+          <span className="text-red-300 text-base leading-none drop-shadow font-bold">✗</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Results section for one completed or failed job.
+function JobResult({ job, jobNumber, totalJobs }: {
+  job:       JobState
+  jobNumber: number
+  totalJobs: number
+}) {
+  // Only show "Photo N" label when there are multiple photos.
+  const label = totalJobs > 1 ? `Photo ${jobNumber}` : null
+
+  if (job.status === 'failed') {
+    return (
+      <div className="px-4 py-3 space-y-1">
+        {label && <p className="text-xs font-medium text-content-secondary">{label}</p>}
+        <p className="text-xs text-red-400">
+          {job.uploadError ?? job.extractionError ?? 'Failed'}
+        </p>
+      </div>
+    )
+  }
+
+  const groups = groupByCategory(job.sightings)
+
+  return (
+    <div className="px-4 py-3 space-y-4">
+
+      <div className="flex items-baseline gap-2">
+        {label && <p className="text-xs font-medium text-content-secondary">{label}</p>}
+        <span className="text-xs text-content-muted">
+          Found {job.sightings.length} poster{job.sightings.length !== 1 ? 's' : ''} on this board
+        </span>
+      </div>
+
+      {/* Fast-path warnings from the extract function */}
+      {job.warnings.map((w, i) => (
+        <p key={i} className="text-xs text-amber-400">⚠ {w}</p>
+      ))}
+
+      {job.sightings.length === 0 && (
+        <p className="text-xs text-content-muted">No events extracted from this photo.</p>
+      )}
+
+      {groups.map(({ category, label: catLabel, items }) => (
+        <div key={category ?? '__uncategorized__'} className="space-y-1.5">
+
+          {/* Category header — colored dot + label */}
+          <div className="flex items-center gap-1.5">
+            <span
+              className="w-1.5 h-1.5 rounded-full shrink-0"
+              style={{ backgroundColor: category ? categoryColor(category) : 'var(--color-content-muted)' }}
+            />
+            <span className="text-xs font-medium text-content-secondary uppercase tracking-wide">
+              {catLabel}
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {items.map((s) => {
+              const hardToRead = s.extraction_confidence < 0.5
+              return (
+                <div key={s.id} className="space-y-0.5 pl-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <Link
+                      href={`/events/${s.events?.id}`}
+                      className="text-sm text-content-secondary hover:text-content-primary truncate"
+                    >
+                      {s.events?.name ?? '(unnamed)'}
+                    </Link>
+                    {contributionBadge(s.match_type)}
+                  </div>
+                  {hardToRead && (
+                    <p className="text-xs text-content-muted">Hard to read — a sharper photo would help.</p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
