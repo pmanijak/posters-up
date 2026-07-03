@@ -30,9 +30,19 @@ const supabase = createClient<Database>(
   process.env.SUPABASE_TELL_ME_MORE_KEY!
 )
 
-// How far ahead the feed looks. Claude groups by date within this window
-// ("this weekend", "next month") rather than the DB hard-filtering.
-const WINDOW_DAYS = 60
+// Two-tier window: most searches don't need 60 days of events, so default narrow
+// and only pay for the wider (and pricier) fetch when the narrow set is thin —
+// same fallback shape already used for the ilike-empty and embed-fail cases
+// elsewhere in this codebase, rather than trying to keyword-detect "this query
+// implies a future date" (fragile, and this project already moved away from
+// that pattern once — see VIBE_HINTS in the search architecture history).
+const NARROW_WINDOW_DAYS = 14
+const WIDE_WINDOW_DAYS   = 60
+
+// Below this row count, the narrow window is assumed too thin to group well —
+// widen and refetch. Placeholder threshold; tune once search_queries logging
+// (see handoff.md Next) shows real row-count distributions per query.
+const MIN_ROWS_BEFORE_WIDENING = 15
 
 // ── Anthropic API types ────────────────────────────────────────────────────
 
@@ -136,6 +146,14 @@ a time ("this weekend", "next month"), or a concrete thing (a band, genre, venue
 group the events to answer that intent. You are not filtering a database; you are a local \
 who knows what's on and points the user at the right handful.
 
+This is a single, non-interactive call — there is no follow-up turn. Never use the lead \
+line to ask the user a clarifying question ("What are you in the mood for?") or to comment \
+on the size of the set ("That's a lot of events!"). Even with a large or loosely-matching \
+set, make your best judgment call and group it — an imperfect grouping is always better \
+than punting the question back. If the query is broad or vague ("what's coming up"), treat \
+it as "show me the highlights" and group by whatever dimensions are most useful (this \
+weekend, free, touring acts, etc.) rather than asking what the user wants.
+
 Grouping principles:
 - Make groups that actually help someone decide: free, all-ages, outdoor, touring acts, this weekend, family-friendly — whatever the query and the set make relevant.
 - 2–4 groups. One group only if the set is truly uniform. Labels must be plain and concrete — never "Vibes", "Picks", "Highlights".
@@ -194,14 +212,14 @@ async function callClaude(
 // (app/page.tsx) already resolves via boards_near() and passes to
 // events_for_boards() — same scoping mechanism, reused here.
 
-async function fetchUpcoming(boardIds: string[]): Promise<EventRow[]> {
+async function fetchUpcoming(boardIds: string[], windowDays: number): Promise<EventRow[]> {
   if (!boardIds.length) return []
 
   const { data, error } = await supabase.rpc('events_for_boards', { board_ids: boardIds })
   if (error) { console.error('events_for_boards error:', error); return [] }
 
   const today     = pacificDate(0)
-  const windowEnd = pacificDate(WINDOW_DAYS)
+  const windowEnd = pacificDate(windowDays)
 
   // events_for_boards returns SETOF events_public with no date filtering —
   // apply the same in-window logic here that the direct query used to do.
@@ -233,45 +251,79 @@ function shuffle<T>(arr: T[]): T[] {
   return result
 }
 
+// Enrichment paragraphs can run 100+ words — plenty for the "Tell me more" card,
+// way more than grouping needs. Truncate to a clause, not a summary: enough for
+// Claude to tell "punk feminist icon" from "senior ballroom dance."
+const ENRICHMENT_CONTEXT_MAX_CHARS = 150
+const DESCRIPTION_MAX_CHARS        = 150
+
+function truncate(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  // Cut at the last word boundary before the limit so it doesn't end mid-word.
+  const cut = text.slice(0, maxChars)
+  const lastSpace = cut.lastIndexOf(' ')
+  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…'
+}
+
+// A `field: ` label repeated across ~400 events is pure overhead — Claude doesn't
+// need "Category:" to recognize a category. One delimited line per event carries
+// the same information with a fraction of the tokens; the column order is
+// documented once in PROMPT_FIELD_HEADER instead of 400 times. Empty fields are
+// left blank between delimiters rather than omitted, so column position stays
+// fixed and unambiguous.
+const FIELD_SEP = ' | '
+
+const PROMPT_FIELD_HEADER =
+  'Each event is one line: id | name | category | date | location | featuring | ' +
+  'price | flags | description\n' +
+  '(flags: any of "free", "outdoor", "N+" for age restriction, "Nx" for board sighting count ≥3 — space-separated, may be empty)'
+
 function formatForPrompt(e: EventRow, enrichment: EnrichmentData | null, random: boolean): string {
   // id and name are non-null at runtime; nullable in the type because Postgres
   // can't infer NOT NULL through views.
-  const lines: string[] = [`ID: ${e.id ?? ''}`, `Name: ${e.name ?? ''}`]
+  const id       = e.id ?? ''
+  const name     = e.name ?? ''
+  const category = e.event_category ?? ''
 
-  if (e.event_category) lines.push(`Category: ${e.event_category}`)
-
+  let date = ''
   if (e.date_type === 'specific' && e.date_start) {
     const [y, m, d] = e.date_start.split('-').map(Number)
-    lines.push(`Date: ${new Date(y, m - 1, d).toLocaleDateString('en-US', {
-      weekday: 'long', month: 'long', day: 'numeric',
-    })}`)
+    date = new Date(y, m - 1, d).toLocaleDateString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric',
+    })
   } else if (e.date_raw) {
-    lines.push(`Date: ${e.date_raw}`)
+    date = e.date_raw
   } else if (e.date_type === 'recurring') {
-    lines.push('Recurring event')
+    date = 'recurring'
   }
 
-  if (e.location_name) lines.push(`Location: ${e.location_name}`)
+  const location = e.location_name ?? ''
 
   // talent is Json | null in the generated type (JSONB aggregate); cast to known shape.
-  const talents = Array.isArray(e.talent) ? e.talent as unknown as TalentEntry[] : []
-  if (talents.length) lines.push(`Featuring: ${talents.map(t => t.name).join(', ')}`)
+  const talents  = Array.isArray(e.talent) ? e.talent as unknown as TalentEntry[] : []
+  const featuring = talents.map(t => t.name).join(', ')
 
-  if (e.price_raw)    lines.push(`Price: ${e.price_raw}`)
-  else if (e.is_free) lines.push('Price: Free')
-  if (e.age_restriction) lines.push(`Ages: ${e.age_restriction}`)
-  if (e.is_outdoor === true) lines.push('Outdoor')
-  if (e.description) lines.push(`Description: ${e.description}`)
-  if (enrichment?.description) lines.push(`Context: ${enrichment.description}`)
-  if (enrichment?.venue_context) lines.push(`Venue: ${enrichment.venue_context}`)
-  if (e.tags?.length) lines.push(`Tags: ${e.tags.join(', ')}`)
+  const price = e.price_raw ?? (e.is_free ? 'free' : '')
 
+  const flags: string[] = []
+  if (e.is_free && !e.price_raw) flags.push('free')
+  if (e.is_outdoor === true) flags.push('outdoor')
+  if (e.age_restriction) flags.push(e.age_restriction)
   // Buzz: suppressed for random queries so surprise picks don't bias to promoted.
-  if (!random && (e.sighting_count ?? 0) >= 3) {
-    lines.push(`Buzz: on ${e.sighting_count} boards around town`)
-  }
+  if (!random && (e.sighting_count ?? 0) >= 3) flags.push(`${e.sighting_count}x`)
 
-  return lines.join('\n')
+  // Description + enrichment context combined into one truncated field —
+  // grouping needs a clause of signal per source, not the full narrative.
+  // Full text still lives in enrichment_data for the "Tell me more" card.
+  const descParts: string[] = []
+  if (e.description) descParts.push(truncate(e.description, DESCRIPTION_MAX_CHARS))
+  if (enrichment?.description) descParts.push(truncate(enrichment.description, ENRICHMENT_CONTEXT_MAX_CHARS))
+  const description = descParts.join(' — ')
+
+  // Tags omitted — mostly redundant with category + description for grouping,
+  // and some lists run 8-10 items. Still shown on the card.
+
+  return [id, name, category, date, location, featuring, price, flags.join(' '), description].join(FIELD_SEP)
 }
 
 // Fetch enrichment context (touring act, venue vibe) for a set of events.
@@ -296,8 +348,8 @@ async function fetchEnrichment(rows: EventRow[]): Promise<Map<string, Enrichment
 async function buildPromptText(rows: EventRow[], random: boolean): Promise<string> {
   if (!rows.length) return 'No events found.'
   const enrichmentMap = await fetchEnrichment(rows)
-  const blocks = rows.map(e => formatForPrompt(e, enrichmentMap.get(e.id ?? '') ?? null, random))
-  return `Found ${rows.length} events:\n\n${blocks.join('\n\n---\n\n')}`
+  const lines = rows.map(e => formatForPrompt(e, enrichmentMap.get(e.id ?? '') ?? null, random))
+  return `Found ${rows.length} events. ${PROMPT_FIELD_HEADER}\n\n${lines.join('\n')}`
 }
 
 // ── Group normalization ────────────────────────────────────────────────────
@@ -344,7 +396,18 @@ export async function POST(req: NextRequest) {
     // No nearby boards (e.g. client hasn't resolved location yet) → nothing to
     // search. Matches the main feed's noBoardsNearby state rather than falling
     // back to an unscoped, system-wide query.
-    let rows = await fetchUpcoming(boardIds)
+    // Random queries go straight to the wide window — a 3-event surprise pick
+    // should draw from the full pool, not just the next two weeks.
+    let rows = await fetchUpcoming(boardIds, isRandom ? WIDE_WINDOW_DAYS : NARROW_WINDOW_DAYS)
+
+    // Narrow set came back thin (e.g. "next month", a slow week, or genuinely
+    // few events near this user) — widen and refetch rather than handing Claude
+    // too little to group well. Mirrors the ilike-empty and embed-fail fallback
+    // pattern used elsewhere in this route's history.
+    if (!isRandom && rows.length < MIN_ROWS_BEFORE_WIDENING) {
+      rows = await fetchUpcoming(boardIds, WIDE_WINDOW_DAYS)
+    }
+
     if (!rows.length) return Response.json({ lead: '', groups: [], events: {} })
 
     // Random / "surprise me": shuffle and take a few. Buzz signal suppressed
@@ -361,12 +424,20 @@ export async function POST(req: NextRequest) {
     // miss the cache entirely. The 1-hour TTL (ttl: '1h') trades a 2x write cost
     // for a much wider hit window — worth revisiting once there's usage data to
     // show how often searches land within 5 minutes of each other.
+    //
+    // The query is explicitly labeled ("User query:") rather than appended as a
+    // bare, unmarked second text block. With a large event list (up to ~350+
+    // rows when dateless/recurring events bypass the window filter — see
+    // fetchUpcoming), an unlabeled 3-5 word instruction tacked onto the end of a
+    // long data dump is easy for the model to under-weight relative to the data
+    // that precedes it. Labeling it removes the ambiguity outright rather than
+    // relying on positional emphasis.
     const { ok, msg } = await callClaude([
       {
         role: 'user',
         content: [
           { type: 'text', text: promptText, cache_control: { type: 'ephemeral' } },
-          { type: 'text', text: userMessage },
+          { type: 'text', text: `User query: "${userMessage}"` },
         ],
       },
     ], system)
