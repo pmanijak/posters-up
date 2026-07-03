@@ -254,7 +254,7 @@ function shuffle<T>(arr: T[]): T[] {
 // Enrichment paragraphs can run 100+ words — plenty for the "Tell me more" card,
 // way more than grouping needs. Truncate to a clause, not a summary: enough for
 // Claude to tell "punk feminist icon" from "senior ballroom dance."
-const ENRICHMENT_CONTEXT_MAX_CHARS = 150
+const ENRICHMENT_CONTEXT_MAX_CHARS = 300
 const DESCRIPTION_MAX_CHARS        = 150
 
 function truncate(text: string, maxChars: number): string {

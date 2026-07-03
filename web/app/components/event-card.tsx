@@ -145,7 +145,10 @@ function EnrichmentSection({
         )
       })}
 
-      {/* Venue context — only if it adds something the description didn't cover */}
+      {/* Venue context — only if it adds something the description didn't cover.
+          Not sent to Claude in route.ts's formatForPrompt (dropped deliberately —
+          low value for grouping relative to its token cost). Still shown here on
+          the card since it's useful context for a human reading the full details. */}
       {enrichment.venue_context && (
         <p className="text-xs leading-relaxed text-content-muted">
           {enrichment.venue_context}
