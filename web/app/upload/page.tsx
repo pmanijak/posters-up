@@ -608,7 +608,7 @@ export default function UploadPage() {
 
             {/* Header */}
             <div className="px-4 py-3 flex items-center justify-between">
-              <span className="text-sm text-content-primary font-medium">Photo submitted</span>
+              <span className="text-sm text-content-primary font-medium">Photo uploaded</span>
               {submitResult.board_id
                 ? <span className="text-xs text-content-muted">
                     {locationName ? `Saved to ${locationName}` : 'Board saved'}
