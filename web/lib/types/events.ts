@@ -11,19 +11,13 @@ export type EventRow = Database['public']['Views']['events_public']['Row']
 //
 // Fields mirror what events_public produces in jsonb_build_object:
 //   id, name, talent_type, role, billing_position
-//
-// confirmed is in event_talent but not yet in the events_public talent aggregate.
-// TODO: add `et.confirmed` to the view's jsonb_build_object and regenerate types.
-// Until then, confirmed will be undefined for all entries; the enrichment gate in
-// EventCard degrades gracefully — talent names still render, links and bios are
-// suppressed (confirmedTalentNames stays empty).
 export interface TalentEntry {
   id:               string
   name:             string
   talent_type:      string | null
   role:             string | null
   billing_position: number | null
-  confirmed?:       boolean
+  confirmed:        boolean
 }
 
 // EnrichmentData lives in lib/types/enrichment.ts — import from there directly.
