@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SYSTEM_PROMPT } from "./system-prompt.ts";
+import { claimAndDispatch } from "../_shared/claimAndDispatch.ts";
 
 // EdgeRuntime is a Supabase Edge Runtime global — not available in standard Deno.
 // waitUntil() keeps the function alive after the response is sent.
@@ -8,6 +9,7 @@ declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_EXTRACT_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const EXTRACT_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/extract`;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -22,11 +24,16 @@ type SupabaseClient = ReturnType<typeof createClient>;
 // Request body from the upload client.
 // photo_path and capture_date come from the upload page after EXIF extraction.
 interface RequestBody {
-  photo_path:    string;
+  photo_path?:   string;
   lat?:          number;
   lng?:          number;
   capture_date?: string;
   board_id?:     string;
+  // Present only on internal dispatch calls from claimAndDispatch (either
+  // the browser-triggered path below, or the extract-drain cron backstop).
+  // Mutually exclusive with photo_path — see the branch at the top of the
+  // request handler.
+  photo_id?:     string;
 }
 
 // Shape of each item returned by the Claude extraction prompt.
@@ -230,17 +237,21 @@ async function upsertTalent(
 // ── Background extraction ──────────────────────────────────────────────────
 //
 // Everything slow: photo download, Claude call, all DB writes.
-// Called via EdgeRuntime.waitUntil() — runs after the browser response is sent.
-// Stamps the photo record complete or failed when done.
+// Invoked via dispatchExtraction() below, which is always itself wrapped in
+// EdgeRuntime.waitUntil() by its caller — runExtraction has no timing
+// contract of its own to honor, it just runs to completion.
+//
+// lat/lng are no longer passed in from the original upload request — they're
+// derived here from the resolved board via board_lat_lng(), since whichever
+// invocation ends up running this (the original request, claim_pending_photos
+// handing the row to a later request, or the cron backstop) may not be the
+// one that had the original request body available.
 
 async function runExtraction(
   photoId: string,
   photo_path: string,
   capturedAt: string,
-  capture_date: string | undefined,
   resolvedBoardId: string | null,
-  lat: number | undefined,
-  lng: number | undefined,
   supabase: SupabaseClient,
 ): Promise<void> {
   try {
@@ -264,9 +275,11 @@ async function runExtraction(
     base64 = btoa(base64);
     const mimeType = photoBlob.type || "image/jpeg";
 
-    // ── Board context ───────────────────────────────────────────────────────
+    // ── Board context + coordinates ─────────────────────────────────────────
     let boardDescription: string | null = null;
     let knownEvents: { name: string; date_start: string | null }[] | null = null;
+    let lat: number | null = null;
+    let lng: number | null = null;
 
     if (resolvedBoardId) {
       const { data: board, error: boardFetchError } = await supabase
@@ -279,6 +292,19 @@ async function runExtraction(
         console.warn(`Could not fetch board context: ${boardFetchError.message}`);
       } else {
         boardDescription = board?.description ?? null;
+      }
+
+      // Derived from the board rather than passed in — see the function
+      // header note on why this can't rely on request-scoped lat/lng anymore.
+      const { data: coords, error: coordsError } = await supabase.rpc("board_lat_lng", {
+        p_board_id: resolvedBoardId,
+      });
+
+      if (coordsError) {
+        console.warn(`Could not fetch board coordinates: ${coordsError.message}`);
+      } else if (coords?.[0]) {
+        lat = coords[0].lat;
+        lng = coords[0].lng;
       }
 
       const { data: flyers, error: flyersError } = await supabase
@@ -303,7 +329,7 @@ async function runExtraction(
 
     // ── Call Claude ─────────────────────────────────────────────────────────
     const userMessage = [
-      `Photo taken: ${capture_date ?? new Date().toISOString().split("T")[0]}`,
+      `Photo taken: ${capturedAt.split("T")[0]}`,
       `Board location: ${boardDescription ?? "unknown"}`,
       `Known events on this board as of last photo: ${knownEvents ? JSON.stringify(knownEvents) : "none"}`,
       "",
@@ -616,12 +642,21 @@ async function runExtraction(
     // ── Talent dedup ────────────────────────────────────────────────────────
     // Run after all items are written so the pass sees the full extraction.
     // v2 (see migration_run_talent_dedup_pass_v2.sql): p_dry_run used to
-    // apply to both tiers uniformly, which meant the previous
-    // { dry_run: false } call here was silently running the
-    // name_similarity tier live too -- that tier has zero corroborating
-    // signal beyond a 0.85 string-similarity bar and was always meant to
-    // require human review before merging. Only same_event (co-occurrence
-    // on the same event corroborates it) is safe to run unattended.
+    // apply to both tiers uniformly, which meant an earlier { dry_run:
+    // false } call here was silently running the name_similarity tier
+    // live too -- that tier has zero corroborating signal beyond a 0.85
+    // string-similarity bar and was always meant to require human review.
+    //
+    // Both tiers set to false for now, pending manual review of the full
+    // same_event dry-run queue: a concatenation-noise false positive was
+    // found in that tier ("Shelter Winston Hightowers" vs "Winston
+    // Hightower" -- one extraction pass glued two adjacent lineup entries
+    // together; co-occurrence corroborates relatedness, not that two
+    // strings name the same act) and guarded against specifically, but
+    // given co-occurrence alone has now produced two distinct false-
+    // positive patterns this session, same_event shouldn't run live again
+    // until `select * from run_talent_dedup_pass() where match_type =
+    // 'same_event'` has been read through in full, not just spot-checked.
     const { error: dedupError } = await supabase.rpc("run_talent_dedup_pass", {
       p_run_same_event: true,
       p_run_name_similarity: false,
@@ -672,11 +707,70 @@ async function runExtraction(
   }
 }
 
+// ── Dispatch ───────────────────────────────────────────────────────────────
+//
+// Runs one already-claimed photo's extraction, then advances the queue.
+// Always called wrapped in EdgeRuntime.waitUntil() by its caller (the
+// internal request branch below) — never awaited by anything that's
+// waiting to send an HTTP response, so it's free to take the full ~75s+
+// without holding a connection open anywhere upstream.
+//
+// The claimAndDispatch() call at the end — not a separate cron tick — is
+// what keeps the queue draining continuously: as soon as this photo's
+// status is written, it immediately tries to claim whatever slot that
+// just freed up. extract-drain only needs to catch what this misses.
+
+async function dispatchExtraction(photoId: string, supabase: SupabaseClient): Promise<void> {
+  const { data: photo, error: fetchError } = await supabase
+    .from("photos")
+    .select("image_url, board_id, captured_at")
+    .eq("id", photoId)
+    .single();
+
+  if (fetchError || !photo) {
+    console.error(`dispatchExtraction: could not load photo ${photoId}:`, fetchError?.message);
+    await supabase
+      .from("photos")
+      .update({ extraction_status: "failed", extraction_error: "Photo record not found at dispatch time" })
+      .eq("id", photoId);
+    return;
+  }
+
+  await runExtraction(
+    photoId,
+    photo.image_url,
+    photo.captured_at ?? new Date().toISOString(),
+    photo.board_id,
+    supabase,
+  );
+
+  await claimAndDispatch({
+    supabase,
+    extractUrl: EXTRACT_FUNCTION_URL,
+    serviceRoleKey: SUPABASE_SERVICE_ROLE_KEY,
+  }).catch(err => console.error("claimAndDispatch after extraction failed:", err));
+}
+
 // ── Request handler ────────────────────────────────────────────────────────
 //
-// Fast path only: auth + rate limit + board resolution + photo record.
-// Returns {photo_id, board_id} to the browser in ~1s.
-// All slow work (photo download, Claude, DB writes) runs in the background.
+// Two distinct paths, branched on request body shape:
+//
+//   { photo_id }   — internal dispatch call, from claimAndDispatch (fired
+//                    either by the browser path below right after it creates
+//                    a row, or by the extract-drain cron backstop). Requires
+//                    the service-role key as bearer, not a user JWT. Fires
+//                    dispatchExtraction via waitUntil and returns immediately
+//                    — the caller only needs the request to have landed, not
+//                    for extraction to have finished.
+//
+//   { photo_path } — the original browser-facing path. Fast path only: auth
+//                    + rate limit + board resolution + photo record. Returns
+//                    {photo_id, board_id} in ~1s. Instead of unconditionally
+//                    firing this photo's own extraction, it calls
+//                    claimAndDispatch() — which may end up dispatching this
+//                    photo, an older one still waiting its turn, several, or
+//                    none, depending on how many slots extract_max_concurrent
+//                    currently has free.
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -687,13 +781,32 @@ Deno.serve(async (req) => {
     return respond({ error: "Method not allowed" }, 405);
   }
 
+  let body: RequestBody;
+  try {
+    body = await req.json() as RequestBody;
+  } catch {
+    return respond({ error: "Invalid JSON body" }, 400);
+  }
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  // ── Internal dispatch path ────────────────────────────────────────────────
+  if (body.photo_id) {
+    const authHeader = req.headers.get("Authorization");
+    if (authHeader !== `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`) {
+      return respond({ error: "Unauthorized" }, 401);
+    }
+
+    EdgeRuntime.waitUntil(dispatchExtraction(body.photo_id, supabase));
+    return respond({ success: true });
+  }
+
   const warnings: string[] = [];
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return respond({ error: "Unauthorized" }, 401);
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const token = authHeader.replace("Bearer ", "");
   const {
     data: { user },
@@ -702,13 +815,6 @@ Deno.serve(async (req) => {
   if (authError || !user) return respond({ error: "Unauthorized" }, 401);
 
   // ── Parse request ─────────────────────────────────────────────────────────
-  let body: RequestBody;
-  try {
-    body = await req.json() as RequestBody;
-  } catch {
-    return respond({ error: "Invalid JSON body" }, 400);
-  }
-
   const { photo_path, lat, lng, capture_date, board_id } = body;
   if (!photo_path) {
     return respond({ error: "photo_path required" }, 400);
@@ -718,6 +824,10 @@ Deno.serve(async (req) => {
   // Used for all observation timestamps (last_seen_at, last_sighted_at,
   // sighted_at) so the DB reflects reality rather than processing time.
   // Falls back to now() only when EXIF capture date wasn't available.
+  // Persisted on the photo row (captured_at) rather than kept only as a
+  // local variable — dispatchExtraction needs to read it back later, since
+  // whichever invocation ends up running extraction for this photo may not
+  // be this one.
   const capturedAt = capture_date
     ? new Date(capture_date).toISOString()
     : new Date().toISOString();
@@ -808,8 +918,9 @@ Deno.serve(async (req) => {
       board_id: resolvedBoardId,
       submitted_by: user.id,
       image_url: photo_path,
+      captured_at: capturedAt,
       delete_after: deleteAfter.toISOString(),
-      extraction_status: "pending",  // updated to 'complete'/'failed' by runExtraction
+      extraction_status: "pending",  // updated to 'processing' by claim_pending_photos, then 'complete'/'failed' by runExtraction
     })
     .select("id")
     .single();
@@ -835,20 +946,19 @@ Deno.serve(async (req) => {
     }
   }
 
-  // ── Hand off to background ────────────────────────────────────────────────
-  // Browser gets photo_id immediately. runExtraction() continues after the
-  // response is sent: photo download → Claude → all DB writes → stamp complete.
+  // ── Hand off to the queue ─────────────────────────────────────────────────
+  // Browser gets photo_id immediately. claimAndDispatch() decides what
+  // actually starts running now — this photo, an older one still waiting,
+  // several, or none — based on how much of extract_max_concurrent is free.
+  // Not a guarantee this specific photo starts immediately: under real
+  // backlog it may sit 'pending' until a slot frees (another extraction
+  // finishing, or the extract-drain cron backstop).
   EdgeRuntime.waitUntil(
-    runExtraction(
-      photoRecord.id,
-      photo_path,
-      capturedAt,
-      capture_date,
-      resolvedBoardId,
-      lat,
-      lng,
+    claimAndDispatch({
       supabase,
-    )
+      extractUrl: EXTRACT_FUNCTION_URL,
+      serviceRoleKey: SUPABASE_SERVICE_ROLE_KEY,
+    })
   );
 
   const response: any = {
