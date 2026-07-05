@@ -39,8 +39,9 @@ type JobStatus = 'queued' | 'uploading' | 'extracting' | 'complete' | 'failed'
 
 interface JobState {
   id:              string
-  file:            File
-  preview:         string        // object URL; revoked on reset/unmount
+  file:            File | null   // null for jobs resumed from the DB after a refresh
+  preview:         string        // object URL for locally-selected files, revoked on reset/unmount;
+                                  // a signed storage URL for jobs resumed after a refresh (not revoked)
   status:          JobStatus
   progress:        number        // 0–100; drives the per-job progress bar
   submitResult:    SubmitResult | null
@@ -48,6 +49,9 @@ interface JobState {
   extractionError: string | null
   uploadError:     string | null
   warnings:        string[]
+  resumed:         boolean       // true for jobs hydrated from the DB, not selected this page-load —
+                                  // only used to decide whether a settled result renders inline or
+                                  // inside the collapsed "completed earlier" section
 }
 
 // ── Supabase client ────────────────────────────────────────────────────────
@@ -152,6 +156,25 @@ function progressMessage(progress: number): string {
 const PROGRESS_DURATION_MS = 75_000
 const PROGRESS_TARGET      = 95
 
+// Browser-side politeness cap on how many jobs run their EXIF/resize/upload
+// phase at once. Independent of the server's extract_max_concurrent — the
+// server already gates true extraction concurrency via its own queue, so
+// this is only about not decoding and resizing a huge batch of full-size
+// photos in the tab at the same instant.
+const MAX_CONCURRENT_CLIENT_JOBS = 3
+
+// sessionStorage key marking when the contributor last hit "Submit another
+// photo" in this tab. Purely a client-side UI boundary — has no server-side
+// meaning and isn't a cache of anything that needs to stay correct, so
+// sessionStorage is the right tool here (unlike photo status itself, which
+// stays entirely DB-driven). Scoped to sessionStorage rather than
+// localStorage on purpose: a reset should mean "not for the rest of this tab
+// session," not "never again on this device."
+const RESET_BOUNDARY_KEY = 'postersup:upload-reset-at'
+
+// The resume-on-refresh window is enforced server-side, not here — see
+// RESUME_WINDOW_HOURS in app/api/photos/recent/route.ts.
+
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function UploadPage() {
@@ -166,7 +189,8 @@ export default function UploadPage() {
 
   // Photo queue
   const [jobs, setJobs] = useState<JobState[]>([])
-  const processingRef   = useRef(false)  // prevents double-starts; guards the queue useEffect
+  const dispatchedRef   = useRef<Set<string>>(new Set())  // job ids ever passed to processJob; prevents double-dispatch before status flips off 'queued'
+  const hydratedForRef  = useRef<string | null>(null)      // user id the resume-on-load effect has already run for
   const mountedRef      = useRef(true)   // guards setJobs calls after unmount
   const fileInputRef    = useRef<HTMLInputElement>(null)
 
@@ -181,6 +205,15 @@ export default function UploadPage() {
   const [boardSubmitted, setBoardSubmitted]                       = useState(false)
   const [boardError, setBoardError]                               = useState<string | null>(null)
 
+  // Collapses settled results from resumed jobs (see the resume effect below)
+  // until the contributor asks to see them — a session resumed with several
+  // already-finished photos would otherwise dump all their full result
+  // blocks at the top before showing anything about what's happening now.
+  // Also re-collapses automatically the moment a new upload starts (see
+  // handleFileChange) — once there's something new happening, the old
+  // results shouldn't stay competing for attention.
+  const [showResumedResults, setShowResumedResults] = useState(false)
+
   // Merges a partial patch into one job by id.
   function updateJob(id: string, patch: Partial<JobState>) {
     if (!mountedRef.current) return
@@ -188,11 +221,20 @@ export default function UploadPage() {
   }
 
   // Full pipeline for one photo: EXIF → resize → upload → extract Edge Function → poll.
-  // Drives the job's status and progress directly via updateJob.
-  // Sets processingRef.current = false on all exit paths so the queue useEffect
-  // picks up the next queued job.
+  // Drives the job's status and progress directly via updateJob. Multiple jobs run
+  // this concurrently (up to MAX_CONCURRENT_CLIENT_JOBS) — dispatchedRef is what
+  // prevents the same job from being started twice, not anything in here.
   async function processJob(job: JobState) {
-    if (!mountedRef.current) { processingRef.current = false; return }
+    if (!mountedRef.current) return
+
+    const file = job.file
+    if (!file) {
+      // Should never happen — processJob is only ever called for freshly
+      // selected files (see the queue effect below), never for jobs resumed
+      // from the DB, which go straight to pollForExtraction instead.
+      console.error(`processJob called with no file for job ${job.id}`)
+      return
+    }
 
     // ── Phase 1: upload ──────────────────────────────────────────────────
 
@@ -202,8 +244,8 @@ export default function UploadPage() {
 
     try {
       const [gps, exifData] = await Promise.all([
-        exifr.gps(job.file).catch(() => null),
-        exifr.parse(job.file, ['DateTimeOriginal']).catch(() => null),
+        exifr.gps(file).catch(() => null),
+        exifr.parse(file, ['DateTimeOriginal']).catch(() => null),
       ])
 
       const lat          = gps?.latitude  ?? null
@@ -212,10 +254,10 @@ export default function UploadPage() {
         ? new Date(exifData.DateTimeOriginal).toISOString()
         : null
 
-      const resized = await resizeImage(job.file)
+      const resized = await resizeImage(file)
 
       const { data: { user: authUser } } = await supabase.auth.getUser()
-      const path = `${authUser!.id}/${Date.now()}-${job.file.name}`
+      const path = `${authUser!.id}/${Date.now()}-${file.name}`
 
       const { error: uploadError } = await supabase.storage
         .from('photos-raw')
@@ -256,28 +298,37 @@ export default function UploadPage() {
         status:      'failed',
         uploadError: err instanceof Error ? err.message : 'Upload failed',
       })
-      processingRef.current = false
       return
     }
-
-    // ── Phase 2: poll for extraction ─────────────────────────────────────
 
     if (!submitResult?.photo_id) {
       // extract didn't return a photo_id — nothing to poll
       updateJob(job.id, { status: 'complete', progress: 100 })
-      processingRef.current = false
       return
     }
 
-    const photoId = submitResult.photo_id
+    await pollForExtraction(job.id, submitResult.photo_id)
+  }
 
+  // Polls /api/photos/[id]/sightings until extraction finishes, animating
+  // the progress bar in the meantime. Shared by processJob (right after a
+  // live upload's extract call returns) and by the resume-on-refresh effect
+  // below (for jobs that were already 'pending'/'processing' in the DB when
+  // the page loaded) — extraction itself is entirely server-driven at this
+  // point, so both cases just need to watch the same status field.
+  async function pollForExtraction(jobId: string, photoId: string, startedAt?: string) {
     // Animate 0 → 95% over 75 s while we wait for the extraction worker.
-    const startTime = Date.now()
+    // startedAt, when given, anchors this to when extraction actually began
+    // (processing_started_at, or submitted_at if still queued) rather than
+    // to whenever this function happens to be called — without it, a
+    // resumed job's bar would reset to 0% and re-climb the full 75s on
+    // every refresh, regardless of how far along it actually was.
+    const startTime = startedAt ? new Date(startedAt).getTime() : Date.now()
     const progressInterval = setInterval(() => {
       if (!mountedRef.current) { clearInterval(progressInterval); return }
       const elapsed = Date.now() - startTime
       const frac    = Math.min(elapsed / PROGRESS_DURATION_MS, 1)
-      updateJob(job.id, { progress: Math.round(frac * PROGRESS_TARGET) })
+      updateJob(jobId, { progress: Math.round(frac * PROGRESS_TARGET) })
     }, 250)
 
     try {
@@ -301,11 +352,11 @@ export default function UploadPage() {
 
         const data = await res.json()
 
-        if (data.sightings) updateJob(job.id, { sightings: data.sightings })
+        if (data.sightings) updateJob(jobId, { sightings: data.sightings })
 
         if (data.extraction_status === 'complete') {
           clearInterval(progressInterval)
-          updateJob(job.id, {
+          updateJob(jobId, {
             status:    'complete',
             progress:  100,
             sightings: data.sightings ?? [],
@@ -313,7 +364,7 @@ export default function UploadPage() {
           break
         } else if (data.extraction_status === 'failed') {
           clearInterval(progressInterval)
-          updateJob(job.id, {
+          updateJob(jobId, {
             status:          'failed',
             extractionError: data.extraction_error ?? 'Extraction failed',
           })
@@ -321,11 +372,26 @@ export default function UploadPage() {
         }
       }
     } finally {
-      // processingRef must be cleared before the final setJobs triggers the
-      // queue useEffect. async/finally runs synchronously before React flushes
-      // the queued render, so the guard is already false when the effect fires.
       clearInterval(progressInterval)
-      processingRef.current = false
+    }
+  }
+
+  // One-shot fetch for a photo that's already 'complete' when resumed after
+  // a refresh — its results just need filling in, there's nothing to poll
+  // for since extraction already finished. Same endpoint pollForExtraction
+  // uses, just called once instead of in a loop.
+  async function fetchSightingsOnce(jobId: string, photoId: string) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`/api/photos/${photoId}/sightings`, {
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      })
+      if (!res.ok || !mountedRef.current) return
+      const data = await res.json()
+      updateJob(jobId, { sightings: data.sightings ?? [] })
+    } catch {
+      // Best-effort — the job still shows as complete either way, just
+      // without its results filled in if this fails.
     }
   }
 
@@ -337,26 +403,150 @@ export default function UploadPage() {
     })
   }, [])
 
+  // Resumes this user's recent session from the DB on load — not just what's
+  // still running, but what finished (or failed) while the tab was closed too.
+  // extraction_status is the real source of truth for progress; the jobs
+  // array is just a local view of it. The window this looks back is enforced
+  // server-side (see app/api/photos/recent/route.ts) rather than pulling
+  // someone's entire upload history on every load. Resumed jobs skip
+  // processJob's upload phase entirely — there's no local File to re-upload,
+  // and there doesn't need to be, since the photo is already in storage and
+  // already at whatever stage the DB says it's at.
+  //
+  // hydratedForRef, not jobs.length, is what makes this run once: jobs
+  // legitimately goes back to [] every time handleReset runs ("Submit
+  // another photo"), so a jobs.length-based guard would fire again right
+  // after every reset and immediately pull the photos you just finished
+  // back in as "resumed" — which looked like the reset not working at all.
+  // Keying on the user id (rather than a plain boolean) also means a
+  // mid-session user switch gets its own hydration instead of being
+  // silently skipped.
+  //
+  // Goes through /api/photos/recent rather than querying `photos` directly —
+  // `authenticated` only has INSERT on `photos` per ARCHITECTURE.md's access
+  // control table, not SELECT, so a direct client query 403s.
+  //
+  // Also sends RESET_BOUNDARY_KEY from sessionStorage as ?after, if set —
+  // otherwise refreshing right after "Submit another photo" would pull the
+  // just-put-away batch straight back in, since the DB has no record that a
+  // reset happened at all.
+  useEffect(() => {
+    if (!user || hydratedForRef.current === user.id) return
+    hydratedForRef.current = user.id
+
+    const resetAt = sessionStorage.getItem(RESET_BOUNDARY_KEY)
+    const url = resetAt
+      ? `/api/photos/recent?after=${encodeURIComponent(resetAt)}`
+      : '/api/photos/recent'
+
+    supabase.auth.getSession().then(({ data: { session } }) =>
+      fetch(url, {
+        headers: { Authorization: `Bearer ${session?.access_token}` },
+      })
+    )
+      .then(res => res.ok ? res.json() : null)
+      .then(json => {
+        const data = json?.photos as
+          {
+            id: string
+            image_url: string
+            board_id: string | null
+            extraction_status: string
+            extraction_error: string | null
+            submitted_at: string
+            processing_started_at: string | null
+          }[]
+          | undefined
+        if (!data?.length || !mountedRef.current) return
+
+        const hydrated: JobState[] = data.map(p => {
+          // Real start time for the progress bar: when extraction actually
+          // began (processing_started_at), or submitted_at if it's still
+          // queued and hasn't been claimed yet. Used both for the initial
+          // progress value here and passed into pollForExtraction below —
+          // without this, the bar would flash to 0% and re-climb the full
+          // 75s arc on every refresh instead of showing real elapsed time.
+          const startedAt = p.processing_started_at ?? p.submitted_at
+          const elapsedFrac = Math.min((Date.now() - new Date(startedAt).getTime()) / PROGRESS_DURATION_MS, 1)
+
+          return {
+            id:              p.id,   // reuse the photo id directly — no local file to give it a separate client id
+            file:            null,
+            preview:         '',     // filled in below once the signed URL resolves; JobThumbnail shows a placeholder until then
+            status:          p.extraction_status === 'complete' ? 'complete'
+                            : p.extraction_status === 'failed'   ? 'failed'
+                            : 'extracting',                       // 'pending' or 'processing'
+            progress:        p.extraction_status === 'complete' ? 100 : Math.round(elapsedFrac * PROGRESS_TARGET),
+            submitResult:    { success: true, photo_id: p.id, board_id: p.board_id },
+            sightings:       [],
+            extractionError: p.extraction_error,
+            uploadError:     null,
+            warnings:        [],
+            resumed:         true,
+          }
+        })
+
+        setJobs(prev => [...hydrated, ...prev])
+
+        // Best-effort thumbnail: a signed URL for the already-uploaded photo.
+        // Failure just leaves the placeholder — doesn't block anything else.
+        for (const p of data) {
+          supabase.storage
+            .from('photos-raw')
+            .createSignedUrl(p.image_url, 3600)
+            .then(({ data: signed }) => {
+              if (signed?.signedUrl && mountedRef.current) {
+                updateJob(p.id, { preview: signed.signedUrl })
+              }
+            })
+        }
+
+        // Per-status follow-up. None of these go through the queue effect
+        // below (status is never 'queued' for a resumed job) or processJob.
+        for (const p of data) {
+          if (p.extraction_status === 'pending' || p.extraction_status === 'processing') {
+            void pollForExtraction(p.id, p.id, p.processing_started_at ?? p.submitted_at)
+          } else if (p.extraction_status === 'complete') {
+            // Already finished — just needs its results filled in once,
+            // not a polling loop. 'failed' needs nothing further; its
+            // extraction_error already came back with the initial query.
+            void fetchSightingsOnce(p.id, p.id)
+          }
+        }
+      })
+    // pollForExtraction/fetchSightingsOnce/updateJob don't close over anything
+    // that should re-run this effect — safe to omit, same as the queue effect below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
+
   useEffect(() => {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
 
-  // Sequential queue processor. Fires whenever `jobs` changes; starts the next
-  // queued job if nothing is currently running. `processingRef` prevents double-starts:
-  // setJobs inside processJob triggers this effect while processJob is still awaiting,
-  // and the guard bails out. When processJob finishes it sets processingRef.current = false
-  // synchronously before the final setJobs triggers a re-render, so the next invocation
-  // of this effect correctly sees it as free.
+  // Bounded-concurrency queue processor. Fires whenever `jobs` changes; starts
+  // as many queued jobs as fit under MAX_CONCURRENT_CLIENT_JOBS. dispatchedRef
+  // prevents double-starts: it's checked and updated synchronously here, so a
+  // job is marked dispatched the instant it's chosen — before processJob's own
+  // updateJob call (which flips status off 'queued') actually lands. Without
+  // that, a re-render firing this effect again in that window could pick the
+  // same still-'queued' job a second time. dispatchedRef entries are never
+  // removed — job ids are freshly generated per file (see handleFileChange),
+  // so a finished job's id sitting in the set forever is harmless.
   useEffect(() => {
-    if (processingRef.current) return
-    const next = jobs.find(j => j.status === 'queued')
-    if (!next) return
-    processingRef.current = true
+    const inFlight = jobs.filter(j => dispatchedRef.current.has(j.id) && j.status !== 'complete' && j.status !== 'failed').length
+    const slots = MAX_CONCURRENT_CLIENT_JOBS - inFlight
+    if (slots <= 0) return
+
+    const toStart = jobs.filter(j => j.status === 'queued' && !dispatchedRef.current.has(j.id)).slice(0, slots)
+    if (toStart.length === 0) return
+
+    toStart.forEach(j => dispatchedRef.current.add(j.id))
     // setTimeout defers processJob out of the synchronous effect body,
-    // avoiding the "setState inside effect" linter warning. The guard above
-    // is already set, so a re-render between here and the next tick is safe.
-    setTimeout(() => void processJob(next), 0)
+    // avoiding the "setState inside effect" linter warning. dispatchedRef is
+    // already updated above, so a re-render between here and the next tick
+    // won't cause any of these jobs to be picked again.
+    setTimeout(() => { toStart.forEach(j => void processJob(j)) }, 0)
     // processJob doesn't close over `jobs` — safe to omit from deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs])
@@ -396,16 +586,19 @@ export default function UploadPage() {
       extractionError: null,
       uploadError:     null,
       warnings:        [],
+      resumed:         false,
     }))
 
     setJobs(prev => [...prev, ...newJobs])
+    setShowResumedResults(false) // starting something new — tuck the old results back away
     e.target.value = '' // reset so the same file can be re-selected
   }
 
   // Resets all queue and board-form state so the contributor can start a new session.
   function handleReset() {
-    jobs.forEach(j => URL.revokeObjectURL(j.preview))
+    jobs.forEach(j => { if (j.preview.startsWith('blob:')) URL.revokeObjectURL(j.preview) })
     setJobs([])
+    setShowResumedResults(false)
     setLastBoardId(null)
     setBoardSubmitted(false)
     setBoardError(null)
@@ -414,6 +607,10 @@ export default function UploadPage() {
     setRequiresEntryToPhotograph(null)
     setRequiresEntryToPost(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
+    // Marks "don't resume anything from before this point" — otherwise a
+    // refresh right after resetting would pull the just-put-away batch
+    // straight back in, since the DB has no idea a reset happened at all.
+    sessionStorage.setItem(RESET_BOUNDARY_KEY, new Date().toISOString())
   }
 
   async function sendOtp() {
@@ -473,7 +670,7 @@ export default function UploadPage() {
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
-  const activeJob  = jobs.find(j => j.status === 'uploading' || j.status === 'extracting')
+  const activeJobs = jobs.filter(j => j.status === 'uploading' || j.status === 'extracting')
   const anySuccess = jobs.some(j => j.status === 'complete')
   const allSettled = jobs.length > 0 && jobs.every(j => j.status === 'complete' || j.status === 'failed')
   const doneCount  = jobs.filter(j => j.status === 'complete' || j.status === 'failed').length
@@ -632,77 +829,108 @@ export default function UploadPage() {
         {jobs.length > 0 && (
           <div className="bg-surface-card rounded-sm border border-edge divide-y divide-edge">
 
-            {/* Thumbnail strip + queue status — only shown for multi-photo */}
-            {jobs.length > 1 && (
-              <div className="px-4 py-3 space-y-3">
-                <div className="flex gap-2 flex-wrap items-center">
-                  {jobs.map(job => (
-                    <JobThumbnail key={job.id} job={job} />
-                  ))}
+            {/* Thumbnail strip + queue status — same for one photo or many;
+                only the board-details form below stays single-photo-only,
+                since that one's a content decision, not a UI one. */}
+            <div className="px-4 py-3 space-y-3">
+              <div className="flex gap-2 flex-wrap items-center">
+                {jobs.map(job => (
+                  <JobThumbnail key={job.id} job={job} />
+                ))}
 
-                  {/* Add more photos while the queue is running or after it finishes */}
-                  <label
-                    className="w-12 h-12 flex items-center justify-center rounded border-2 border-dashed border-edge-subtle text-content-muted text-xl cursor-pointer transition-colors hover:border-content-muted hover:text-content-secondary"
-                    title="Add more photos"
-                  >
-                    +
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      onChange={handleFileChange}
-                      className="sr-only"
-                    />
-                  </label>
-                </div>
-
-                {!allSettled && (
-                  <p className="text-xs text-content-muted">
-                    {activeJob
-                      ? `Processing photo ${doneCount + 1} of ${jobs.length}…`
-                      : `${doneCount} of ${jobs.length} done`
-                    }
-                  </p>
-                )}
+                {/* Add more photos while the queue is running or after it finishes */}
+                <label
+                  className="w-12 h-12 flex items-center justify-center rounded border-2 border-dashed border-edge-subtle text-content-muted text-xl cursor-pointer transition-colors hover:border-content-muted hover:text-content-secondary"
+                  title="Add more photos"
+                >
+                  +
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleFileChange}
+                    className="sr-only"
+                  />
+                </label>
               </div>
-            )}
 
-            {/* Progress bar — shown for the active job only.
+              {!allSettled && (
+                <p className="text-xs text-content-muted">
+                  {activeJobs.length > 0
+                    ? `Processing ${activeJobs.length} of ${jobs.length}…`
+                    : `${doneCount} of ${jobs.length} done`
+                  }
+                </p>
+              )}
+            </div>
+
+            {/* Progress bars — one per concurrently active job.
                 'uploading' uses animate-pulse (fast, indeterminate);
                 'extracting' uses the 0→95 linear animation. */}
-            {activeJob && (
-              <div className="px-4 py-3 space-y-1.5">
+            {activeJobs.map(job => (
+              <div key={job.id} className="px-4 py-3 space-y-1.5">
+                <p className="text-xs text-content-secondary truncate">{job.file?.name ?? 'Resumed photo'}</p>
                 <div className="h-1 w-full bg-surface-raised rounded-full overflow-hidden">
-                  {activeJob.status === 'uploading' ? (
+                  {job.status === 'uploading' ? (
                     <div className="h-full w-full bg-content-secondary rounded-full animate-pulse" />
                   ) : (
                     <div
                       className="h-full bg-content-secondary rounded-full"
-                      style={{ width: `${activeJob.progress}%`, transition: 'width 0.25s linear' }}
+                      style={{ width: `${job.progress}%`, transition: 'width 0.25s linear' }}
                     />
                   )}
                 </div>
                 <p className="text-xs text-content-muted">
-                  {activeJob.status === 'uploading'
+                  {job.status === 'uploading'
                     ? 'Uploading…'
-                    : progressMessage(activeJob.progress)
+                    : progressMessage(job.progress)
                   }
                 </p>
               </div>
-            )}
+            ))}
 
-            {/* Per-job results — appear as each photo completes or fails */}
+            {/* Per-job results — appear as each freshly-selected photo completes or fails.
+                Resumed jobs (from before a refresh) are collapsed below instead —
+                see showResumedResults. */}
             {jobs
-              .filter(j => j.status === 'complete' || j.status === 'failed')
+              .filter(j => (j.status === 'complete' || j.status === 'failed') && !j.resumed)
               .map((job, idx) => (
                 <JobResult
                   key={job.id}
                   job={job}
                   jobNumber={idx + 1}
-                  totalJobs={jobs.length}
                 />
               ))
             }
+
+            {/* Collapsed results for jobs resumed from before a refresh — a
+                session resumed with several already-finished photos would
+                otherwise dump all of them, fully expanded, ahead of anything
+                happening right now. */}
+            {(() => {
+              const resumedSettled = jobs.filter(j => j.resumed && (j.status === 'complete' || j.status === 'failed'))
+              if (resumedSettled.length === 0) return null
+              return (
+                <div>
+                  <button
+                    onClick={() => setShowResumedResults(v => !v)}
+                    className="w-full px-4 py-3 flex items-center justify-between text-xs text-content-muted hover:text-content-secondary transition-colors"
+                  >
+                    <span>
+                      {showResumedResults ? 'Hide' : 'Show'} {resumedSettled.length} completed upload{resumedSettled.length !== 1 ? 's' : ''} from earlier
+                    </span>
+                    <span>{showResumedResults ? '▲' : '▼'}</span>
+                  </button>
+                  {showResumedResults && resumedSettled.map((job, idx) => (
+                    <JobResult
+                      key={job.id}
+                      job={job}
+                      jobNumber={idx + 1}
+                    />
+                  ))}
+                </div>
+              )
+            })()}
 
             {/* Board details — single-photo only. Multi-photo sessions are typically
                 a walkabout covering many different boards, so the form would be
@@ -854,10 +1082,15 @@ function JobThumbnail({ job }: { job: JobState }) {
   return (
     <div
       className={`relative w-12 h-12 rounded overflow-hidden shrink-0 ring-2 ${ringColor}`}
-      title={job.file.name}
+      title={job.file?.name ?? 'Resumed photo'}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={job.preview} alt="" className="w-full h-full object-cover" />
+      {job.preview ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={job.preview} alt="" className="w-full h-full object-cover" />
+      ) : (
+        // Resumed job whose signed preview URL hasn't resolved yet (or failed)
+        <div className="w-full h-full bg-surface-raised" />
+      )}
 
       <div className={`absolute inset-0 flex items-center justify-center ${job.status === 'queued' ? 'bg-black/40' : ''}`}>
         {job.status === 'queued' && (
@@ -872,13 +1105,14 @@ function JobThumbnail({ job }: { job: JobState }) {
 }
 
 // Results section for one completed or failed job.
-function JobResult({ job, jobNumber, totalJobs }: {
+function JobResult({ job, jobNumber }: {
   job:       JobState
   jobNumber: number
-  totalJobs: number
 }) {
-  // Only show "Photo N" label when there are multiple photos.
-  const label = totalJobs > 1 ? `Photo ${jobNumber}` : null
+  // Shown regardless of count now, same as the thumbnail strip/status line —
+  // only the board-details form stays single-photo-only, since that one's a
+  // content decision (which board this is), not a UI one.
+  const label = `Photo ${jobNumber}`
 
   if (job.status === 'failed') {
     return (

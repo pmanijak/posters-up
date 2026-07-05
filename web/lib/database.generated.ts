@@ -840,6 +840,7 @@ export type Database = {
       photos: {
         Row: {
           board_id: string | null
+          captured_at: string | null
           created_at: string
           delete_after: string
           extracted_at: string | null
@@ -849,11 +850,13 @@ export type Database = {
           image_deleted_at: string | null
           image_url: string | null
           previous_photo_id: string | null
+          processing_started_at: string | null
           submitted_at: string
           submitted_by: string | null
         }
         Insert: {
           board_id?: string | null
+          captured_at?: string | null
           created_at?: string
           delete_after: string
           extracted_at?: string | null
@@ -863,11 +866,13 @@ export type Database = {
           image_deleted_at?: string | null
           image_url?: string | null
           previous_photo_id?: string | null
+          processing_started_at?: string | null
           submitted_at?: string
           submitted_by?: string | null
         }
         Update: {
           board_id?: string | null
+          captured_at?: string | null
           created_at?: string
           delete_after?: string
           extracted_at?: string | null
@@ -877,6 +882,7 @@ export type Database = {
           image_deleted_at?: string | null
           image_url?: string | null
           previous_photo_id?: string | null
+          processing_started_at?: string | null
           submitted_at?: string
           submitted_by?: string | null
         }
@@ -951,6 +957,9 @@ export type Database = {
           id: string
           is_active: boolean
           last_active_at: string | null
+          merge_match_type: string | null
+          merged_at: string | null
+          merged_into_id: string | null
           name: string
           talent_type: string | null
           website: string | null
@@ -963,6 +972,9 @@ export type Database = {
           id?: string
           is_active?: boolean
           last_active_at?: string | null
+          merge_match_type?: string | null
+          merged_at?: string | null
+          merged_into_id?: string | null
           name: string
           talent_type?: string | null
           website?: string | null
@@ -975,11 +987,104 @@ export type Database = {
           id?: string
           is_active?: boolean
           last_active_at?: string | null
+          merge_match_type?: string | null
+          merged_at?: string | null
+          merged_into_id?: string | null
           name?: string
           talent_type?: string | null
           website?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "talent_merged_into_id_fkey"
+            columns: ["merged_into_id"]
+            isOneToOne: false
+            referencedRelation: "talent"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "talent_merged_into_id_fkey"
+            columns: ["merged_into_id"]
+            isOneToOne: false
+            referencedRelation: "talent_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      talent_name_reviews: {
+        Row: {
+          candidate_name: string
+          evidence_url: string | null
+          first_flagged_at: string
+          flag_detail: string | null
+          flag_reason: string
+          id: string
+          last_flagged_at: string
+          name_key: string
+          reasoning: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          split_suggestion_a: string | null
+          split_suggestion_b: string | null
+          status: string
+          talent_id: string | null
+          used_web_search: boolean | null
+          verdict_confidence: string | null
+        }
+        Insert: {
+          candidate_name: string
+          evidence_url?: string | null
+          first_flagged_at?: string
+          flag_detail?: string | null
+          flag_reason: string
+          id?: string
+          last_flagged_at?: string
+          name_key: string
+          reasoning?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          split_suggestion_a?: string | null
+          split_suggestion_b?: string | null
+          status?: string
+          talent_id?: string | null
+          used_web_search?: boolean | null
+          verdict_confidence?: string | null
+        }
+        Update: {
+          candidate_name?: string
+          evidence_url?: string | null
+          first_flagged_at?: string
+          flag_detail?: string | null
+          flag_reason?: string
+          id?: string
+          last_flagged_at?: string
+          name_key?: string
+          reasoning?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          split_suggestion_a?: string | null
+          split_suggestion_b?: string | null
+          status?: string
+          talent_id?: string | null
+          used_web_search?: boolean | null
+          verdict_confidence?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "talent_name_reviews_talent_id_fkey"
+            columns: ["talent_id"]
+            isOneToOne: false
+            referencedRelation: "talent"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "talent_name_reviews_talent_id_fkey"
+            columns: ["talent_id"]
+            isOneToOne: false
+            referencedRelation: "talent_public"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       users: {
         Row: {
@@ -1372,6 +1477,13 @@ export type Database = {
           lng: number
         }[]
       }
+      board_lat_lng: {
+        Args: { p_board_id: string }
+        Returns: {
+          lat: number
+          lng: number
+        }[]
+      }
       boards_near: {
         Args: { lat: number; lng: number; radius_m?: number }
         Returns: {
@@ -1399,6 +1511,22 @@ export type Database = {
           relevance_score: number
           requires_entry_to_photograph: boolean
           requires_entry_to_post: boolean
+        }[]
+      }
+      claim_pending_photos: {
+        Args: never
+        Returns: {
+          id: string
+        }[]
+      }
+      cluster_event_name_buckets: {
+        Args: { p_connect_similarity?: number; p_event_id: string }
+        Returns: {
+          component_id: string
+          sample_value: string
+          sighting_count: number
+          sighting_ids: string[]
+          total_weight: number
         }[]
       }
       compute_event_confidence: {
@@ -1442,6 +1570,30 @@ export type Database = {
         | { Args: { table_name: string }; Returns: string }
       enablelongtransactions: { Args: never; Returns: string }
       equals: { Args: { geom1: unknown; geom2: unknown }; Returns: boolean }
+      event_components_share_date: {
+        Args: {
+          p_connect_similarity?: number
+          p_event_id: string
+          p_min_component_sightings?: number
+        }
+        Returns: boolean
+      }
+      event_components_share_location: {
+        Args: {
+          p_connect_similarity?: number
+          p_event_id: string
+          p_min_component_sightings?: number
+        }
+        Returns: boolean
+      }
+      event_components_share_talent: {
+        Args: {
+          p_connect_similarity?: number
+          p_event_id: string
+          p_min_component_sightings?: number
+        }
+        Returns: boolean
+      }
       events_for_boards: {
         Args: { board_ids: string[] }
         Returns: {
@@ -1666,7 +1818,11 @@ export type Database = {
         Returns: undefined
       }
       merge_talent: {
-        Args: { p_canonical_id: string; p_duplicate_id: string }
+        Args: {
+          p_canonical_id: string
+          p_duplicate_id: string
+          p_match_type?: string
+        }
         Returns: undefined
       }
       normalize_event_name: { Args: { p_name: string }; Returns: string }
@@ -1710,6 +1866,16 @@ export type Database = {
       }
       postgis_version: { Args: never; Returns: string }
       postgis_wagyu_version: { Args: never; Returns: string }
+      reap_stale_processing_photos: { Args: never; Returns: number }
+      reconstruct_talent_from_sightings: {
+        Args: { p_dry_run?: boolean }
+        Returns: {
+          change_type: string
+          detail: string
+          talent_id: string
+          talent_name: string
+        }[]
+      }
       run_dedup_pass: {
         Args: { p_dry_run?: boolean }
         Returns: {
@@ -1720,14 +1886,35 @@ export type Database = {
           match_type: string
         }[]
       }
-      run_talent_dedup_pass: {
+      run_field_reconciliation_pass: {
         Args: { p_dry_run?: boolean }
+        Returns: {
+          auto_split: boolean
+          date_overlap_detected: boolean
+          event_id: string
+          field: string
+          flagged: boolean
+          location_overlap_detected: boolean
+          new_value: string
+          old_value: string
+          runner_up_sightings: number
+          runner_up_value: string
+          talent_overlap_detected: boolean
+          total_sightings: number
+          vote_share: number
+          winning_sightings: number
+        }[]
+      }
+      run_talent_dedup_pass: {
+        Args: { p_run_name_similarity?: boolean; p_run_same_event?: boolean }
         Returns: {
           canonical_id: string
           canonical_name: string
           duplicate_id: string
           duplicate_name: string
+          flagged: boolean
           match_type: string
+          merged: boolean
         }[]
       }
       search_events_semantic: {
@@ -1792,6 +1979,21 @@ export type Database = {
       }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
+      split_event: {
+        Args: {
+          p_dry_run?: boolean
+          p_event_id: string
+          p_sighting_ids: string[]
+        }
+        Returns: {
+          boards_affected: number
+          new_event_id: string
+          new_event_name: string
+          old_event_boards_removed: number
+          sightings_moved: number
+          talent_moved: number
+        }[]
+      }
       st_3dclosestpoint: {
         Args: { geom1: unknown; geom2: unknown }
         Returns: unknown
