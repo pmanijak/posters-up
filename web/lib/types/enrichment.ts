@@ -33,12 +33,20 @@ export interface EnrichmentFound {
   contact:          string | null   // public-facing URL only; no personal contacts
 }
 
+export type SourceType =
+  | 'venue_website'
+  | 'org_website'
+  | 'local_calendar'
+  | 'ticketing'
+  | 'news'
+  | 'social'
+
 // ── Per-source attribution ─────────────────────────────────────────────────
 
 export interface EnrichmentSource {
   url:             string
   label:           string           // human-readable: "Obsidian calendar", "Bandcamp"
-  source_type:     string           // venue_website | org_website | local_calendar |
+  source_type:     SourceType       // venue_website | org_website | local_calendar |
                                     // ticketing | news | social
   verified_fields: string[]         // fields this source confirmed; feeds event_verifications
 }
