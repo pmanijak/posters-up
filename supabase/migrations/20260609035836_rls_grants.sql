@@ -1,1 +1,0 @@
-GRANT SELECT ON events_public TO anon;
