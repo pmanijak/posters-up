@@ -126,7 +126,17 @@ The `events.contact` field is public-facing and contains only public-facing URLs
 
 `confidence_note` in the extraction output does double duty: it flags both reading quality issues ("low contrast on date field") and contact policy decisions ("personal contact withheld — mobile number on flyer"). Pipeline code that parses `confidence_note` should account for both patterns.
 
-### 6. Deduplication is conservative.
+### 6. Semantic search is Claude interpretation over filtered candidates, not vector retrieval — for now.
+
+The original design called for a two-stage retrieval architecture: SQL hard filters → pgvector ANN over `embedding` → Claude ranks and explains. This was built and tested against real vibe queries (e.g. "inspiring for the kids") and lost to a simpler alternative: Claude interprets the query first — deciding whether it's a concrete token search or a vibe phrase needing a broad fetch — then reasons directly over the ilike/trigram-filtered candidate pool.
+
+The vector path lost for diagnosable reasons, not because embeddings are a bad idea: the RPC had no date-relevance or confidence floor in its ranking, and `search_text` (built for keyword search) isn't the right embedding target for vibe queries. This doesn't rule out vector search generally — it means Claude's query-interpretation step is currently doing the job vector retrieval was meant to do, more cheaply, at today's corpus size.
+
+**Current approach:** Claude interprets → SQL/ilike/trigram retrieval → Claude ranks and explains. No embedding step in the live path.
+
+**Embedding infrastructure is kept, not removed.** `events.embedding`, the `vector` extension, and `search_events_semantic()` remain in the schema, unused. Revisit when either: the corpus grows past what fits in a single prompt (city-partitioning may solve this first — see City Scaling), or real query-usage data justifies it (instrumentation not yet built — see `handoff.md`).
+
+### 7. Deduplication is conservative.
 
 A false merge (two events wrongly merged into one) corrupts confidence on the wrong record and loses information. A duplicate listing is survivable and self-corrects as the confidence pipeline runs. Therefore: **when in doubt, create a new event.**
 
@@ -142,25 +152,25 @@ The nightly `run_dedup_pass()` function scans for duplicates and can merge them,
 
 One schema constraint to keep in mind when writing merge logic: `event_verifications.source_url_normalized` is a **generated column** — it cannot be INSERTed or UPDATEd directly. When re-pointing verifications from a duplicate to a canonical event, delete any rows whose normalized URL already exists on the canonical first, then UPDATE the remainder.
 
-### 7. Boards are never deleted.
+### 8. Boards are never deleted.
 
 `event_sightings.board_id` uses `ON DELETE SET NULL`. If a board is deleted, those sightings lose their board reference, and `compute_event_confidence()` counts `DISTINCT board_id` — a null board_id is never counted. Deleting boards silently deflates confidence on events that were sighted there.
 
 Convention: mark boards inactive with `is_active = false`. Never `DELETE`.
 
-### 8. Events are in local time, not server time.
+### 9. Events are in local time, not server time.
 
 Timezone bugs bite: an 8pm show in Olympia disappears from "today's" list at around noon if dates are computed in UTC. All date comparisons use the event's **local timezone** — currently `America/Los_Angeles` for Olympia, but designed to come from city config as more cities are added.
 
 `new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date())` is the pattern; never `new Date().toISOString().split('T')[0]`.
 
-### 9. The extraction prompt is the canonical source.
+### 10. The extraction prompt is the canonical source.
 
 `extraction-prompt.md` in the project files is the authoritative extraction system prompt. The Edge Function embeds it directly. If they diverge, the prompt in `extraction-prompt.md` wins — the function was synced to it intentionally, and any future prompt changes should update the project file first.
 
 The prompt includes developer notes for known edge cases: dark-background gig posters, minimal flyers that over-flag null confidence, QR codes, handwritten text, crossed-out corrections, store hours mistaken for recurring events, and multi-performance runs. These are real patterns observed in early Olympia testing.
 
-### 10. Prompt caching is a production optimization.
+### 11. Prompt caching is a production optimization.
 
 The extraction system prompt is ~3-4k tokens and identical on every call. It's a strong candidate for Anthropic's prompt caching (mark with `cache_control: { type: "ephemeral" }`). Same applies to the enrichment prompt. Not implemented yet, but worth doing before scaling contributor volume.
 
@@ -304,7 +314,7 @@ All tunable thresholds live in the `config` table, not in code. No deploy needed
 - Organizer accounts or direct event posting (social layer deferred until observational model proves out)
 - Notification mechanism for follows and saved boards (schema supports it; delivery not built)
 - `saved_boards` table (schema sketched in `idea-save-this-board.md`)
-- `search_text` + `embedding` generation (schema columns exist; generation pipeline not built)
+- Search query instrumentation (`search_queries` table — query text, path served, latency, click-through) — the prerequisite for any future vector-search revisit; not yet built (see Core Design Principle 6)
 - pgTAP test suite (deferred post-MVP; most needed for `compute_event_confidence`, `find_event_match`, `apply_board_submission`, `merge_events`)
 - Venue calendar scraping (venue_website is the highest-trust source and the natural next pipeline input after enrichment stabilizes)
 - Monetization (candidates: freemium for organizers, local business sponsorships, civic partnerships)
