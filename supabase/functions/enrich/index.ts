@@ -211,7 +211,7 @@ function parseGeoPoint(raw: unknown): Coords | null {
 async function reverseGeocode(coords: Coords): Promise<UserLocation | null> {
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lng}&format=json&zoom=10`,
+      `https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lng}&format=json&zoom=14`,
       {
         headers: {
           "User-Agent": "PostersUp/1.0 (postersup.org)",
@@ -226,12 +226,16 @@ async function reverseGeocode(coords: Coords): Promise<UserLocation | null> {
     const addr = data?.address ?? {};
     const city: string | undefined = addr.city ?? addr.town ?? addr.village;
     // Same opportunistic neighbourhood-tier lookup as extract's
-    // reverseGeocodeBoard(). zoom=10 here is chosen for city-level context,
-    // not neighbourhood, so this is very often undefined even where
-    // extract's zoom=17 board-creation lookup found one. That's fine — this
-    // function only runs as a fallback for boards whose geo cache extract
-    // didn't already populate (see resolveLocationContext below), so it
-    // inherits whatever granularity this coarser zoom happens to return.
+    // reverseGeocodeBoard(). zoom=14 is Nominatim's own "neighbourhood" tier
+    // (see https://nominatim.org/release-docs/latest/api/Reverse/) — the
+    // nearest neighbourhood-rank object is found and its hierarchy (city,
+    // state, country) still comes along above it, same as before. This was
+    // zoom=10 (city-rank) originally, which structurally excludes
+    // neighbourhood: at that zoom the found object IS the city, and a
+    // city's own upward hierarchy never includes its own children. Where no
+    // neighbourhood polygon exists near a point (true of most of Olympia),
+    // Nominatim falls back to the nearest object it does have, the same way
+    // extract's zoom=17 lookup already degrades gracefully for those boards.
     const neighborhood: string | undefined =
       addr.neighbourhood ?? addr.suburb ?? addr.quarter ?? addr.city_district;
     const region: string | undefined = addr.state;
