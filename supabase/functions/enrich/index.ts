@@ -329,6 +329,25 @@ For each performer named in the input, search for:
 If a performer has no web presence, include them with null bio and empty links array.
 Only include performers who appear in the input talent list — do not add others.
 
+TALENT DISAMBIGUATION (hard):
+Band and artist names are frequently shared by unrelated acts in other cities — a
+bare name search can surface a same-named act instead of the one actually playing
+this show. Before attaching bio/genre/links to a performer, confirm the web
+presence belongs to the act in THIS show, not just an act with this name:
+  - Prefer results reachable from, or corroborated by, the confirmed venue/event
+    page, or from a source that references the board's city, the venue name, or
+    another performer on this same bill. That link is the disambiguator.
+  - A YouTube result is often a good tiebreaker even without a follow-up search:
+    video titles, descriptions, or comments frequently name a specific venue,
+    city, or date, which a bare Bandcamp or artist-website hit usually lacks. If
+    a YouTube result already surfaced from a search you ran, weigh it before
+    a link with no local/date signal at all.
+  - If two same-named acts turn up and only one can be tied to this city, venue,
+    bill, or date, use that one. If neither can be tied to this show, or only a
+    same-named act elsewhere is found, prefer null bio and empty links over
+    guessing. A wrong "Listen" link is a worse outcome than no link — it sends
+    someone to the wrong band's music with false confidence.
+
 VENUE CONTEXT:
 Only populate if the web tells you something genuinely additive about the space itself: all-ages vs 21+, seated vs standing, known for good sound, coffee shop vs proper venue, capacity, parking, etc. Do not restate anything already in the description — if you covered the venue in the description paragraph, leave venue_context null. Do not restate the address or name. If you find nothing that the description didn't already cover, set venue_context to null.
 
