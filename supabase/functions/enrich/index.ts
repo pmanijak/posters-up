@@ -120,9 +120,17 @@ interface Coords {
   lng: number;
 }
 
+// NOTE: this shape is passed directly as the `user_location` param on the
+// Anthropic web_search tool (see callEnrichmentApi), which only documents
+// type/city/region/country. neighborhood is carried here for our own
+// disambiguation/display purposes (getBoardLocation, saveBoardGeo) but is
+// deliberately stripped back out before this object reaches the tool call
+// — see toApiUserLocation() below. Don't pass `userLocation` to the tools
+// array directly; go through that helper.
 interface UserLocation {
   type: "approximate";
   city?: string;
+  neighborhood?: string;
   region?: string;
   country?: string;
 }
@@ -217,12 +225,21 @@ async function reverseGeocode(coords: Coords): Promise<UserLocation | null> {
     const data = await res.json();
     const addr = data?.address ?? {};
     const city: string | undefined = addr.city ?? addr.town ?? addr.village;
+    // Same opportunistic neighbourhood-tier lookup as extract's
+    // reverseGeocodeBoard(). zoom=10 here is chosen for city-level context,
+    // not neighbourhood, so this is very often undefined even where
+    // extract's zoom=17 board-creation lookup found one. That's fine — this
+    // function only runs as a fallback for boards whose geo cache extract
+    // didn't already populate (see resolveLocationContext below), so it
+    // inherits whatever granularity this coarser zoom happens to return.
+    const neighborhood: string | undefined =
+      addr.neighbourhood ?? addr.suburb ?? addr.quarter ?? addr.city_district;
     const region: string | undefined = addr.state;
     const country: string | undefined = addr.country_code?.toUpperCase();
 
     if (!city && !region) return null;
 
-    return { type: "approximate", city, region, country };
+    return { type: "approximate", city, neighborhood, region, country };
   } catch {
     return null;
   }
@@ -238,7 +255,7 @@ async function getBoardLocation(
 ): Promise<BoardLocation | null> {
   const { data } = await supabase
     .from("event_sightings")
-    .select("board_id, boards!inner ( geolocation, geo_city, geo_region, geo_country )")
+    .select("board_id, boards!inner ( geolocation, geo_city, geo_region, geo_country, geo_neighborhood )")
     .eq("event_id", eventId)
     .not("board_id", "is", null)
     .neq("review_status", "rejected")
@@ -256,6 +273,7 @@ async function getBoardLocation(
     ? {
         type: "approximate",
         city: board.geo_city,
+        neighborhood: board.geo_neighborhood ?? undefined,
         region: board.geo_region ?? undefined,
         country: board.geo_country ?? undefined,
       }
@@ -273,6 +291,7 @@ async function saveBoardGeo(
     .from("boards")
     .update({
       geo_city: geo.city ?? null,
+      geo_neighborhood: geo.neighborhood ?? null,
       geo_region: geo.region ?? null,
       geo_country: geo.country ?? null,
     })
@@ -281,6 +300,17 @@ async function saveBoardGeo(
   if (error) {
     console.error(`saveBoardGeo failed for board ${boardId}:`, error);
   }
+}
+
+// Strips neighborhood before this location is handed to the Anthropic
+// web_search tool's user_location param — that schema only documents
+// type/city/region/country, and passing an extra field through unchecked
+// isn't worth the risk of an API-level rejection. neighborhood stays
+// available on the LocationContext/UserLocation for our own use
+// (getBoardLocation, saveBoardGeo) right up to this boundary.
+function toApiUserLocation(loc: UserLocation): Omit<UserLocation, "neighborhood"> {
+  const { neighborhood: _drop, ...rest } = loc;
+  return rest;
 }
 
 async function resolveLocationContext(
@@ -481,7 +511,7 @@ async function callEnrichmentApi(
         type: "web_search_20250305",
         name: "web_search",
         max_uses: 3,
-        ...(userLocation ? { user_location: userLocation } : {}),
+        ...(userLocation ? { user_location: toApiUserLocation(userLocation) } : {}),
       }],
     }),
   });

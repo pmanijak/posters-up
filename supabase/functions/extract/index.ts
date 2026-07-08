@@ -110,13 +110,15 @@ function extractJson(text: string): string {
 
 // Reverse geocodes a board location at street level (zoom=17).
 // Populates both the human-readable description ("4th Ave E, Olympia")
-// and the city/region/country cache used by the enrich function.
+// and the city/neighborhood/region/country cache used by the enrich function
+// and the "Seattle - Fremont" style area picker.
 // Non-blocking — if Nominatim fails, board is created without description.
 async function reverseGeocodeBoard(lat: number, lng: number): Promise<{
   description: string | null
   geo_city: string | null
   geo_region: string | null
   geo_country: string | null
+  geo_neighborhood: string | null
 } | null> {
   try {
     const res = await fetch(
@@ -135,8 +137,14 @@ async function reverseGeocodeBoard(lat: number, lng: number): Promise<{
     const city    = addr.city ?? addr.town ?? addr.village ?? null
     const region  = addr.state ?? null
     const country = addr.country_code?.toUpperCase() ?? null
+    // Nominatim's neighbourhood-tier field name varies by locale/region --
+    // try the common ones in order of specificity. This is opportunistic:
+    // frequently absent even when city/region resolve fine, and that's
+    // expected (see the column comment on boards.geo_neighborhood), not
+    // an error worth logging.
+    const neighborhood = addr.neighbourhood ?? addr.suburb ?? addr.quarter ?? addr.city_district ?? null
     const description = [road, city].filter(Boolean).join(", ") || null
-    return { description, geo_city: city, geo_region: region, geo_country: country }
+    return { description, geo_city: city, geo_region: region, geo_country: country, geo_neighborhood: neighborhood }
   } catch {
     return null
   }
@@ -892,6 +900,7 @@ Deno.serve(async (req) => {
           geo_city:     geo?.geo_city     ?? null,
           geo_region:   geo?.geo_region   ?? null,
           geo_country:  geo?.geo_country  ?? null,
+          geo_neighborhood: geo?.geo_neighborhood ?? null,
         })
         .select("id")
         .single();
