@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 @theme inline {
   --color-surface-page:   #1E2420;
@@ -15,14 +16,27 @@
   --font-mono:  var(--font-geist-mono);
   --font-marker: var(--font-permanent-marker);
 }
-
 body {
-  background: var(--color-surface-page);
-  color: var(--color-content-primary);
-  font-family: Arial, Helvetica, sans-serif;
+background: var(--color-surface-page);
+color: var(--color-content-primary);
+font-family: Arial, Helvetica, sans-serif;
 }
-
 /* prevent iPhone auto-zoom when clicking inputs */
 input, textarea, select {
-  font-size: 16px;
+font-size: 16px;
+}
+
+/* Map Tailwind Typography's CSS vars to this app's dark palette --
+   the plugin's defaults assume a light background. Used by the
+   privacy policy page (app/privacy/page.tsx) via className="prose". */
+.prose {
+  --tw-prose-body:          var(--color-content-secondary);
+  --tw-prose-headings:      var(--color-content-primary);
+  --tw-prose-bold:          var(--color-content-primary);
+  --tw-prose-links:         var(--color-content-accent);
+  --tw-prose-bullets:       var(--color-content-muted);
+  --tw-prose-hr:            var(--color-edge);
+  --tw-prose-quotes:        var(--color-content-primary);
+  --tw-prose-quote-borders: var(--color-edge);
+  --tw-prose-counters:      var(--color-content-muted);
 }
