@@ -14,9 +14,7 @@ import type { Metadata } from 'next'
 import ReactMarkdown from 'react-markdown'
 import { CONTACT_EMAIL, SITE_TITLE, SITE_URL } from '@/lib/site'
 
-// Bump POLICY_LAST_UPDATED whenever the policy text changes;
-// POLICY_EFFECTIVE_DATE is the date it first took effect.
-const POLICY_EFFECTIVE_DATE = 'DRAFT'
+// Bump this whenever the policy text changes.
 const POLICY_LAST_UPDATED = 'July 9, 2026'
 
 export const metadata: Metadata = {
@@ -36,7 +34,6 @@ function renderPolicyMarkdown(): string {
   const tokens: Record<string, string> = {
     CONTACT_EMAIL,
     ACCOUNT_URL: `${SITE_URL}/account`,
-    POLICY_EFFECTIVE_DATE,
     POLICY_LAST_UPDATED,
   }
 

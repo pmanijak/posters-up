@@ -1,6 +1,5 @@
 # Privacy Policy — Posters Up
 
-**Effective:** {{POLICY_EFFECTIVE_DATE}}
 **Last updated:** {{POLICY_LAST_UPDATED}}
 
 Posters Up ("Posters Up," "we," "us," or "our") operates postersup.org and related apps (the "Service"). This Privacy Policy explains what information we collect, how we use it, and the choices you have. By using the Service, you agree to the practices described here.
