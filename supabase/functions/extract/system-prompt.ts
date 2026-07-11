@@ -237,6 +237,7 @@ Score a field low when that specific region is affected by:
   - low contrast in that region of the image only
   - handwritten text that is only partially legible
   - stylized or decorative font that required significant interpretation
+  - stated day-of-week and calendar date appear inconsistent (if you can tell)
 
 A flyer that is mostly clean but has a torn corner obscuring the date
 should score name: 0.95, date: 0.20, location: 0.85 — not uniformly

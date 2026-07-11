@@ -108,6 +108,36 @@ function extractJson(text: string): string {
   return text.trim();
 }
 
+// Deterministic date-consistency check — catches internally inconsistent
+// date readings (e.g. "Wednesday July 11th 2026" when July 11, 2026 is
+// actually a Saturday) for free, with no reliance on the vision model's
+// own day-of-week arithmetic, which LLMs are unreliable at. A mismatch
+// here is provably wrong, not a judgment call — the flyer's stated
+// weekday and its calendar date are supposed to be the same fact stated
+// two ways, not two independent observations.
+//
+// Returns a low confidence on mismatch, or null when there's nothing to
+// check (no day-of-week word in date_raw, or no date_start). null flows
+// into find_event_match() as "trusted" (see v_date_trusted in the 8-arg
+// overload in schema_current.sql) — this only ever downgrades trust,
+// never upgrades it, and never overrides a lower field_confidence.date
+// the model may have already reported for an unrelated legibility reason
+// (see the Math.min composition where this is used below).
+const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+function dayOfWeekConsistencyConfidence(
+  dateRaw: string | null,
+  dateStart: string | null,
+): number | null {
+  if (!dateRaw || !dateStart) return null;
+
+  const stated = DAY_NAMES.find(day => dateRaw.toLowerCase().includes(day));
+  if (!stated) return null;
+
+  const actual = DAY_NAMES[new Date(dateStart + "T00:00:00Z").getUTCDay()];
+  return actual === stated ? null : 0.3;
+}
+
 // Reverse geocodes a board location at street level (zoom=17).
 // Populates both the human-readable description ("4th Ave E, Olympia")
 // and the city/neighborhood/region/country cache used by the enrich function
@@ -416,6 +446,22 @@ async function runExtraction(
           ?? item.talent[0]?.name
           ?? null;
 
+        // Date confidence passed to find_event_match(): the more pessimistic
+        // of (a) the model's own field_confidence.date self-report (legibility
+        // only — see FIELD CONFIDENCE in system-prompt.ts) and (b) a
+        // deterministic day-of-week/calendar-date consistency check (catches
+        // provably wrong dates a legible-looking read can still produce — see
+        // dayOfWeekConsistencyConfidence above). Either signal alone can
+        // downgrade trust; neither can upgrade it. null (both absent) means
+        // find_event_match() treats the date as trusted, same as before this
+        // check existed.
+        const consistencyConfidence = dayOfWeekConsistencyConfidence(item.date_raw, item.date_start);
+        const dateConfidenceCandidates = [item.field_confidence?.date, consistencyConfidence]
+          .filter((v): v is number => v != null);
+        const dateConfidence = dateConfidenceCandidates.length > 0
+          ? Math.min(...dateConfidenceCandidates)
+          : null;
+
         const { data: match, error: matchError } = await supabase.rpc("find_event_match", {
           p_name:            item.name,
           p_date_start:      item.date_start ?? null,
@@ -424,7 +470,7 @@ async function runExtraction(
           p_board_lng:       lng ?? null,
           p_event_url:       item.event_url ?? null,
           p_talent_name:     topAct,
-          p_date_confidence: item.field_confidence?.date ?? null,
+          p_date_confidence: dateConfidence,
         });
 
         if (matchError) {
