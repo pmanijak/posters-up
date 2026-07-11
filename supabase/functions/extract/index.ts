@@ -123,6 +123,16 @@ function extractJson(text: string): string {
 // never upgrades it, and never overrides a lower field_confidence.date
 // the model may have already reported for an unrelated legibility reason
 // (see the Math.min composition where this is used below).
+//
+// Uses a word-boundary regex, not a plain substring check — "sunday" is
+// a literal substring of the real word "Whitsunday" (found via a
+// dictionary search while testing this), which a naive .includes() would
+// have wrongly read as a stated weekday on any flyer mentioning it. The
+// trade-off: a plural like "Fridays" no longer matches either, since
+// there's no word boundary between "y" and "s". That's an acceptable
+// false negative (a real day-name reference goes unchecked) rather than
+// a false positive (a wrong flag) — consistent with this function only
+// ever downgrading trust, never fabricating a mismatch that isn't there.
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
 function dayOfWeekConsistencyConfidence(
@@ -131,7 +141,8 @@ function dayOfWeekConsistencyConfidence(
 ): number | null {
   if (!dateRaw || !dateStart) return null;
 
-  const stated = DAY_NAMES.find(day => dateRaw.toLowerCase().includes(day));
+  const lower = dateRaw.toLowerCase();
+  const stated = DAY_NAMES.find(day => new RegExp(`\\b${day}\\b`).test(lower));
   if (!stated) return null;
 
   const actual = DAY_NAMES[new Date(dateStart + "T00:00:00Z").getUTCDay()];
