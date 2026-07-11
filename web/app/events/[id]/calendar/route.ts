@@ -38,7 +38,11 @@ function escapeICS(value: string): string {
 // we don't know the timezone of every venue and don't want to lie about it.
 function formatDate(date: string, time: string | null): string {
   const d = date.replace(/-/g, '')
-  if (!time) return `VALUE=DATE:${d}`
+  // Leading ';' is required — this gets concatenated directly onto the
+  // property name (e.g. `DTSTART${formatDate(...)}`), and without it
+  // "DTSTARTVALUE=DATE:..." isn't a recognized property at all, which
+  // silently drops the whole VEVENT (DTSTART is required).
+  if (!time) return `;VALUE=DATE:${d}`
   const t = time.replace(/:/g, '').slice(0, 6).padEnd(6, '0')
   return `:${d}T${t}`
 }
@@ -53,7 +57,7 @@ function formatEndDate(date: string | null, startDate: string, time: string | nu
     // the previous day.
     const [y, m, day] = effective.split('-').map(Number)
     const next = new Date(Date.UTC(y, m - 1, day + 1))
-    return `VALUE=DATE:${next.toISOString().slice(0, 10).replace(/-/g, '')}`
+    return `;VALUE=DATE:${next.toISOString().slice(0, 10).replace(/-/g, '')}`
   }
   const t = time.replace(/:/g, '').slice(0, 6).padEnd(6, '0')
   return `:${d}T${t}`

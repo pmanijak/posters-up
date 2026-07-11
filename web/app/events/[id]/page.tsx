@@ -8,6 +8,7 @@ import { EventCard } from '@/app/components/event-card'
 import { PageHeader } from '@/app/components/page-header'
 import { SITE_TITLE, SITE_URL } from '@/lib/site'
 import type { TalentEntry } from '@/lib/types/events'
+import { EventActions } from '@/app/components/event-actions'
 
 type EventRow = Database['public']['Views']['events_public']['Row']
 
@@ -147,6 +148,7 @@ export default async function EventPage({
       <main className="max-w-2xl mx-auto px-4 py-4">
         <Suspense fallback={<div className="rounded-sm bg-surface-card h-40 animate-pulse" />}>
           <EventCard event={event} />
+          <EventActions event={event} />
         </Suspense>
       </main>
     </div>
