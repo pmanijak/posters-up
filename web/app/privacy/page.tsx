@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Metadata } from 'next'
 import ReactMarkdown from 'react-markdown'
-import { CONTACT_EMAIL, SITE_TITLE, SITE_URL } from '@/lib/site'
+import { SITE_TITLE } from '@/lib/site'
 
 // Bump this whenever the policy text changes.
 const POLICY_LAST_UPDATED = 'July 9, 2026'
@@ -32,8 +32,8 @@ function renderPolicyMarkdown(): string {
   )
 
   const tokens: Record<string, string> = {
-    CONTACT_EMAIL,
-    ACCOUNT_URL: `${SITE_URL}/account`,
+    ACCOUNT_URL: '/account',
+    CONTACT_URL: '/contact',
     POLICY_LAST_UPDATED,
   }
 

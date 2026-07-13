@@ -179,6 +179,7 @@ export type Database = {
           first_sighted_at: string
           geo_city: string | null
           geo_country: string | null
+          geo_neighborhood: string | null
           geo_region: string | null
           geolocation: unknown
           id: string
@@ -199,6 +200,7 @@ export type Database = {
           first_sighted_at?: string
           geo_city?: string | null
           geo_country?: string | null
+          geo_neighborhood?: string | null
           geo_region?: string | null
           geolocation: unknown
           id?: string
@@ -219,6 +221,7 @@ export type Database = {
           first_sighted_at?: string
           geo_city?: string | null
           geo_country?: string | null
+          geo_neighborhood?: string | null
           geo_region?: string | null
           geolocation?: unknown
           id?: string
@@ -261,6 +264,54 @@ export type Database = {
           value?: string
         }
         Relationships: []
+      }
+      contact_messages: {
+        Row: {
+          category: string
+          context_url: string | null
+          created_at: string
+          email: string | null
+          event_id: string | null
+          id: string
+          message: string
+          status: string
+        }
+        Insert: {
+          category?: string
+          context_url?: string | null
+          created_at?: string
+          email?: string | null
+          event_id?: string | null
+          id?: string
+          message: string
+          status?: string
+        }
+        Update: {
+          category?: string
+          context_url?: string | null
+          created_at?: string
+          email?: string | null
+          event_id?: string | null
+          id?: string
+          message?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contact_messages_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contact_messages_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events_public"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       event_reports: {
         Row: {
@@ -571,6 +622,9 @@ export type Database = {
           location_geo: unknown
           location_name: string | null
           masks_required: string | null
+          merge_match_type: string | null
+          merged_at: string | null
+          merged_into_id: string | null
           name: string
           organization_id: string | null
           price_raw: string | null
@@ -623,6 +677,9 @@ export type Database = {
           location_geo?: unknown
           location_name?: string | null
           masks_required?: string | null
+          merge_match_type?: string | null
+          merged_at?: string | null
+          merged_into_id?: string | null
           name: string
           organization_id?: string | null
           price_raw?: string | null
@@ -675,6 +732,9 @@ export type Database = {
           location_geo?: unknown
           location_name?: string | null
           masks_required?: string | null
+          merge_match_type?: string | null
+          merged_at?: string | null
+          merged_into_id?: string | null
           name?: string
           organization_id?: string | null
           price_raw?: string | null
@@ -691,6 +751,20 @@ export type Database = {
           venue_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "events_merged_into_id_fkey"
+            columns: ["merged_into_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "events_merged_into_id_fkey"
+            columns: ["merged_into_id"]
+            isOneToOne: false
+            referencedRelation: "events_public"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "events_organization_id_fkey"
             columns: ["organization_id"]
@@ -1467,6 +1541,17 @@ export type Database = {
         Args: { p_board_id: string }
         Returns: undefined
       }
+      available_areas: {
+        Args: never
+        Returns: {
+          board_count: number
+          geo_city: string
+          geo_neighborhood: string
+          geo_region: string
+          lat: number
+          lng: number
+        }[]
+      }
       available_cities: {
         Args: never
         Returns: {
@@ -1593,6 +1678,10 @@ export type Database = {
           p_min_component_sightings?: number
         }
         Returns: boolean
+      }
+      event_date_type_priority: {
+        Args: { p_date_type: string }
+        Returns: number
       }
       events_for_boards: {
         Args: { board_ids: string[] }
@@ -1813,10 +1902,19 @@ export type Database = {
         }
         Returns: boolean
       }
-      merge_events: {
-        Args: { p_canonical_id: string; p_duplicate_id: string }
-        Returns: undefined
-      }
+      merge_events:
+        | {
+            Args: { p_canonical_id: string; p_duplicate_id: string }
+            Returns: undefined
+          }
+        | {
+            Args: {
+              p_canonical_id: string
+              p_duplicate_id: string
+              p_match_type?: string
+            }
+            Returns: undefined
+          }
       merge_talent: {
         Args: {
           p_canonical_id: string
@@ -1826,6 +1924,7 @@ export type Database = {
         Returns: undefined
       }
       normalize_event_name: { Args: { p_name: string }; Returns: string }
+      normalize_location_name: { Args: { p_location: string }; Returns: string }
       populate_geometry_columns:
         | { Args: { tbl_oid: unknown; use_typmod?: boolean }; Returns: number }
         | { Args: { use_typmod?: boolean }; Returns: string }
@@ -1881,6 +1980,7 @@ export type Database = {
         Returns: {
           canonical_id: string
           canonical_name: string
+          date_type_mismatch: boolean
           duplicate_id: string
           duplicate_name: string
           match_type: string

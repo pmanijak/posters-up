@@ -4,7 +4,7 @@
 
 Posters Up ("Posters Up," "we," "us," or "our") operates postersup.org and related apps (the "Service"). This Privacy Policy explains what information we collect, how we use it, and the choices you have. By using the Service, you agree to the practices described here.
 
-If you have questions, contact us at [{{CONTACT_EMAIL}}](mailto:{{CONTACT_EMAIL}}).
+If you have questions, [contact us]({{CONTACT_URL}}).
 
 ## 1. Who This Applies To
 
@@ -79,7 +79,7 @@ We do not permit these providers to use your data for their own independent purp
 - **Your contributor account** (your email address) is kept for as long as your account exists. We do not currently delete accounts automatically after a period of inactivity; your account and its associated data persist until you choose to delete them. When you delete your account, we remove your email and delete the images of any photos you've submitted; any remaining submission record is detached from your identity, so what survives is anonymous and no longer linked to you.
 - **Extracted event knowledge** (e.g., that an event happened at a certain place and time) may be retained after the source photo is deleted, since this information no longer identifies you or the original image. It is disconnected from any photo reference once the photo is removed.
 
-You can delete your account and associated photos at any time at [{{ACCOUNT_URL}}]({{ACCOUNT_URL}}).
+You can delete your account and associated photos at any time from [your account page]({{ACCOUNT_URL}}).
 
 ## 7. Your Rights and Choices
 
@@ -87,10 +87,10 @@ The personal information we hold about contributors is minimal: your **email add
 
 Because we retain so little, most requests come down to two things:
 
-- **Deletion.** You can delete your account and any associated photos yourself, at any time, at [{{ACCOUNT_URL}}]({{ACCOUNT_URL}}).
+- **Deletion.** You can delete your account and any associated photos yourself, at any time, from [your account page]({{ACCOUNT_URL}}).
 - **Access.** You can ask what, if anything, we currently hold under your account — in practice, this will be your email address and any photos not yet auto-deleted.
 
-To make an access request, email [{{CONTACT_EMAIL}}](mailto:{{CONTACT_EMAIL}}). We will respond within a reasonable time and in accordance with applicable law.
+To make an access request, [contact us]({{CONTACT_URL}}). We will respond within a reasonable time and in accordance with applicable law.
 
 If you are located in the European Economic Area, UK, or Switzerland, you may also have additional rights under the GDPR — such as restricting or objecting to certain processing — and the right to lodge a complaint with your local data protection authority.
 
@@ -112,4 +112,4 @@ We may update this Privacy Policy from time to time. If we make material changes
 
 ## 12. Contact Us
 
-Questions about this Privacy Policy or your data? Reach us at [{{CONTACT_EMAIL}}](mailto:{{CONTACT_EMAIL}}).
+Questions about this Privacy Policy or your data? [Contact us]({{CONTACT_URL}}).
