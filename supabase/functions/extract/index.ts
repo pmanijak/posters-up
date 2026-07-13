@@ -407,7 +407,22 @@ async function runExtraction(
         // tradeoff at time of writing — Sonnet 5 intro pricing ($2/$10) is
         // at or below Sonnet 4.6's standard rate ($3/$15).
         model: "claude-sonnet-5",
-        max_tokens: 16000,
+        // Sonnet 5 runs adaptive thinking by default when this field is
+        // omitted — a behavior change from 4.6, where omitting it meant no
+        // thinking. Explicitly disabled here: this is a deterministic
+        // structured-extraction task with a fixed output schema: thinking
+        // buys nothing for it, and leaving it on caused two real failures
+        // together — thinking tokens competing with response tokens inside
+        // the same max_tokens cap (truncated JSON on dense boards), and a
+        // thinking block landing at content[0] ahead of the text block,
+        // which broke the response parsing below (see rawText).
+        thinking: { type: "disabled" },
+        // Bumped from 16000: Sonnet 5's new tokenizer produces ~30% more
+        // tokens for equivalent text, and a densely packed board (dozens
+        // of items, each a full JSON object) is exactly the workload shape
+        // where that adds up fastest. This is a ceiling, not a spend floor
+        // — raising it costs nothing on boards that don't need it.
+        max_tokens: 20000,
         system: [
           {
             type: "text",
@@ -436,7 +451,14 @@ async function runExtraction(
     }
 
     const claudeData = await claudeRes.json();
-    const rawText = claudeData.content?.[0]?.text ?? "";
+    // Find the text block by type rather than assume content[0] — with
+    // thinking disabled this should always be content[0] in practice, but
+    // filtering explicitly (matching enrich/index.ts's existing pattern)
+    // means a future config change here can't silently reintroduce the
+    // same "content[0] wasn't actually the text block" failure mode.
+    const textBlock = (claudeData.content as Array<{ type: string; text?: string }> ?? [])
+      .find((b) => b.type === "text" && b.text);
+    const rawText = textBlock?.text ?? "";
 
     let extractedItems: ExtractedItem[];
     try {
