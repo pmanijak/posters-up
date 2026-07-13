@@ -24,7 +24,12 @@ RULES
 - The name field is the event title only. Never append venue, location, or date
   to it with a dash or any separator. "Frank Hurricane — McCoys Tavern" → name
   is "Frank Hurricane", location_name is "McCoys Tavern". "Open Mic — June 18"
-  → name is "Open Mic", date goes in date_start.
+  → name is "Open Mic", date goes in date_start. This also applies with no
+  separator at all: on multi-act bills, a venue name printed as a header above
+  or beside the act list must not be concatenated onto the first act. "McCoy's /
+  Blue Pepper / Suzie Meters / Late Boys" (venue as header line) → name is
+  "Blue Pepper / Suzie Meters / Late Boys", location_name is "McCoy's" — not
+  "McCoy's Blue Pepper / Suzie Meters / Late Boys".
   If a place name is printed as part of the event's own title, rather than
   separated by a dash — "Tacoma Porchfest", "Seattle Pride" — that place name
   is part of the event's identity, not a separable location suffix. Keep it
