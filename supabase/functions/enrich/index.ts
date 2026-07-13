@@ -81,6 +81,12 @@ interface EnrichmentTalent {
 }
 
 interface EnrichmentFound {
+  // The event name as it actually appears on the source(s) used —
+  // not the input Name, not a paraphrase. Populated whenever any
+  // source is cited, even if it matches the input exactly, so
+  // processEvent() has something concrete to compare against
+  // (see event_name_similarity() / the "name" verified_fields strip).
+  name: string | null;
   date_start: string | null;
   date_end: string | null;
   time_start: string | null;
@@ -160,6 +166,52 @@ const TRUST_WEIGHTS: Record<SourceType, number> = {
 };
 
 const VALID_SOURCE_TYPES = new Set<string>(Object.keys(TRUST_WEIGHTS));
+
+// ---------------------------------------------------------------------------
+// Identity guards — must match the config table values
+// See 20260713050000_enrich_identity_guards.sql.
+//
+// Both guards answer the same underlying question at different fields:
+// did the source(s) actually confirm THIS event, or did web search
+// successfully find a different real event that happens to share
+// something with it (a name, a format)? A high-confidence, well-
+// corroborated find is not evidence of identity by itself — see
+// EVENT IDENTITY / DATE IDENTITY in the prompt below for the two
+// concrete cases that prompted these:
+//   - name:  "Frolicking Card Show" verified by four sources all
+//            describing the real, differently-named "Front Row Card
+//            Show" — same event, misread name, high name-mismatch.
+//   - date:  "Porchfest" (Olympia board, flyer dated 2026-07-18)
+//            verified against Olympia's own separate, real Porch Fest
+//            — which runs on Labor Day, not in July. Tacoma Porchfest
+//            runs July 18-19 and is the event that flyer actually
+//            describes; the city-scoped search found the wrong,
+//            same-named event instead. Same-named recurring formats
+//            (Porchfest, Pride, Restaurant Week, ...) reused city to
+//            city make this a distinct, recurring risk, not a one-off.
+// ---------------------------------------------------------------------------
+
+// Below this pg_trgm similarity between events.name and found.name,
+// "name" is stripped from verified_fields before the
+// event_verifications insert — the EVENT IDENTITY prompt section
+// asks the model to make this call itself, this is the code-side
+// backstop so a future prompt regression can't silently reopen it.
+const NAME_SIMILARITY_FLOOR = 0.30;
+
+// Beyond this many days between events.date_start (what the flyer
+// says) and found.date_start (what the source says), "date_start" —
+// and date_end/time_start/time_end alongside it, since they describe
+// the same identified instance — are stripped from verified_fields.
+// Deliberately not the same tight ABS(...) <= 1 window run_dedup_pass()
+// uses for same-flyer OCR slop: this isn't distinguishing two readings
+// of one date, it's distinguishing "the same event" from "a different
+// instance of a recurring format", so a wider berth is correct — a
+// festival's date moving by a few days year to year, or a weekend
+// event's Saturday/Sunday sessions, shouldn't trip this. Only applied
+// when both dates are known; enrich is frequently queued specifically
+// because date_start is null (see fetchEventsNeedingEnrichment), and
+// finding a date in that case is the point, not a mismatch to flag.
+const DATE_MISMATCH_TOLERANCE_DAYS = 3;
 
 function validSourceType(raw: string): SourceType {
   return VALID_SOURCE_TYPES.has(raw) ? (raw as SourceType) : "org_website";
@@ -346,6 +398,52 @@ The board's city is in the input. Only return results for events in that city.
 A touring artist may have many upcoming shows — find the one in the board's city.
 If you cannot confirm a show in that city, set date_start and location_address to null. Never report a date or address from another city.
 
+EVENT IDENTITY (hard):
+The input Name comes from a photo of a physical flyer — it can be misread
+(bad OCR on a stylized font, a partly obscured word). A date+city+venue
+match is not the same thing as a name match: it's possible to correctly
+find the real event that flyer was advertising while the input Name itself
+was never right to begin with. Do not assume they're the same thing just
+because everything else lines up.
+  - Always set found.name to the event name as it actually appears in the
+    source(s) you used — copy it from the source, don't echo the input
+    Name back and don't paraphrase.
+  - Only include "name" in a source's verified_fields when that source's
+    own name for the event is recognizably the same event as the input
+    Name — matching words, not just a matching date/venue. A source whose
+    own name shares nothing with the input Name has not verified the
+    name, no matter how well it matches on date and location; still cite
+    it for whatever it does confirm (date_start, location_address, etc.),
+    just leave "name" out of that source's verified_fields.
+  - If every source you find agrees with each other but none of them
+    resembles the input Name, you have likely found the correct event
+    under a different, more accurate name than the flyer extraction
+    produced — report found.name as that consistent name regardless.
+    Do not suppress a strong, consistent find just because it disagrees
+    with the input.
+
+DATE IDENTITY (hard):
+Recurring formats (Porchfest, Pride, Restaurant Week, a farmers market
+season opener...) are frequently run independently, under the exact
+same or a near-identical name, by unrelated organizers in different
+nearby cities, on different dates. The board's city constraint above
+narrows your search to one city, but a same-named event's OWN
+established date (an annual festival's usual weekend, a recurring
+series' known schedule) can still be a different date than the one on
+this specific flyer — that's a sign you may have found a different,
+same-named event's page, not proof you've found this one.
+  - If the input Date is a specific date and a source's own date for
+    the event differs by more than a few days, do not include
+    "date_start" (or date_end/time_start/time_end) in that source's
+    verified_fields — still fine to cite the source for name or
+    location_address if those hold up independently, and still set
+    found.date_start to what the source actually says.
+  - This is informational, not necessarily a contradiction to resolve:
+    the flyer may be correctly advertising a same-named event in
+    another city, cross-posted to a board here. Report what you found
+    even when it disagrees with the input date — do not silently
+    adjust found.date_start toward the input to make it agree.
+
 TOUR PAGES:
 If you land on a general tour or shows listing (artist.com/tour), do not stop there. Scan for a show in the board's city. If found, link to the deepest available URL — the specific event page or ticketing link, not the tour index. If not found, do a follow-up search for "[artist name] [city]" or "[artist name] [venue name]" before giving up.
 
@@ -404,6 +502,7 @@ label should be a short human-readable name for display: "Obsidian calendar", "B
 VERIFIED FIELDS:
 verified_fields must only list fields you confirmed for this specific event in this city.
 A tour listing page confirms "name" only — not date_start or location_address — unless you found the specific local show on it. A venue calendar confirms name, date_start, location_address. A ticketing page for the specific show confirms name, date_start, time_start, location_address.
+See EVENT IDENTITY above for when "name" is allowed in this list, and DATE IDENTITY for when "date_start"/"date_end"/"time_start"/"time_end" are — a source can confirm one without confirming the other.
 
 OUTPUT:
 Your entire response must be a single JSON object and nothing else. No prose before it. No explanation after it. No markdown fences.
@@ -423,6 +522,7 @@ If you found nothing useful after searching: {"description":null,"talent":[],"ve
   "ticket_url": "direct ticket purchase link or null",
   "sold_out": true or null,
   "found": {
+    "name": "event name exactly as the source(s) give it, or null if nothing was found",
     "date_start": "YYYY-MM-DD or null",
     "date_end": "YYYY-MM-DD or null",
     "time_start": "HH:MM 24h or null",
@@ -656,6 +756,59 @@ async function processEvent(
 
   if (!hasContent) return "skipped";
 
+  // Name-identity guard (see NAME_SIMILARITY_FLOOR above). One check per
+  // event, not per source: found.name is a single value describing what
+  // the model settled on across all its sources, so this gates whether
+  // "name" is trustworthy at all for this enrichment result, not a
+  // per-source judgment. A low score doesn't discard the sources — date/
+  // location corroboration still counts — it only means none of them
+  // get credit for having verified the event's identity.
+  let nameVerifiable = true;
+  if (result!.found.name) {
+    const { data: similarity, error: simError } = await supabase.rpc(
+      "event_name_similarity",
+      { p_a: event.name, p_b: result!.found.name }
+    );
+    if (simError) {
+      // Fail closed: if we can't check, don't credit an unverified claim.
+      console.error(`event_name_similarity RPC failed for event ${event.id}:`, simError);
+      nameVerifiable = false;
+    } else {
+      nameVerifiable = (similarity ?? 0) >= NAME_SIMILARITY_FLOOR;
+      if (!nameVerifiable) {
+        console.log(
+          `enrich: name mismatch for event ${event.id} — stored "${event.name}" vs found "${result!.found.name}" (similarity ${similarity}); stripping "name" from verified_fields`
+        );
+      }
+    }
+  } else {
+    // No found.name at all despite having sources — can't credit "name"
+    // as verified against nothing to compare it to.
+    nameVerifiable = false;
+  }
+
+  // Date-identity guard (see DATE_MISMATCH_TOLERANCE_DAYS above). Same
+  // one-check-per-event shape as the name guard, same reasoning: only
+  // runs when there's an actual input date to check against — a null
+  // events.date_start is frequently *why* this event was queued for
+  // enrichment in the first place (see fetchEventsNeedingEnrichment),
+  // and a found date in that case is the gap being filled, not a claim
+  // to be suspicious of.
+  let dateVerifiable = true;
+  if (event.date_start && result!.found.date_start) {
+    const inputDate = new Date(event.date_start + "T00:00:00Z");
+    const foundDate = new Date(result!.found.date_start + "T00:00:00Z");
+    const dayDiff = Math.abs(inputDate.getTime() - foundDate.getTime()) / 86_400_000;
+    dateVerifiable = dayDiff <= DATE_MISMATCH_TOLERANCE_DAYS;
+    if (!dateVerifiable) {
+      console.log(
+        `enrich: date mismatch for event ${event.id} ("${event.name}") — flyer date ${event.date_start} vs found ${result!.found.date_start} (${dayDiff} days apart); stripping date/time fields from verified_fields`
+      );
+    }
+  }
+
+  const DATE_IDENTITY_FIELDS = new Set(["date_start", "date_end", "time_start", "time_end"]);
+
   // Insert one event_verifications row per source.
   // Each INSERT fires trg_verification_confidence → compute_event_confidence().
   // This is the only path by which enrichment affects the events table —
@@ -665,7 +818,11 @@ async function processEvent(
 
     const sourceType = validSourceType(source.source_type ?? classifySourceByUrl(source.url));
     const verifiedFields: Record<string, boolean> = {};
-    for (const field of source.verified_fields ?? []) verifiedFields[field] = true;
+    for (const field of source.verified_fields ?? []) {
+      if (field === "name" && !nameVerifiable) continue;
+      if (DATE_IDENTITY_FIELDS.has(field) && !dateVerifiable) continue;
+      verifiedFields[field] = true;
+    }
 
     const { error } = await supabase.from("event_verifications").insert({
       event_id: event.id,

@@ -1683,6 +1683,10 @@ export type Database = {
         Args: { p_date_type: string }
         Returns: number
       }
+      event_name_similarity: {
+        Args: { p_a: string; p_b: string }
+        Returns: number
+      }
       events_for_boards: {
         Args: { board_ids: string[] }
         Returns: {
