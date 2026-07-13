@@ -393,7 +393,20 @@ async function runExtraction(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        // Sonnet 5, not 4.6 — this is load-bearing, not just a version bump.
+        // 4.6 caps at 1568px / 1568 visual tokens on the long edge; Sonnet 5
+        // is in the high-resolution tier (2576px / 4784 tokens), same as
+        // Opus 4.7+. On a densely packed board (dozens of flyers in one
+        // photo), each individual flyer's share of that budget is what
+        // actually determines whether small text stays legible — a board
+        // with 27 flyers effectively has ~3x less resolution to spend per
+        // flyer than a photo of one flyer would, at either tier. Confirmed
+        // case: a "Tacoma Porchfest" flyer read as "Olympia Porchfest" on a
+        // 27-item board under 4.6 — not a prompt-following failure, an
+        // information-loss-before-the-model-ever-saw-it failure. No cost
+        // tradeoff at time of writing — Sonnet 5 intro pricing ($2/$10) is
+        // at or below Sonnet 4.6's standard rate ($3/$15).
+        model: "claude-sonnet-5",
         max_tokens: 16000,
         system: [
           {

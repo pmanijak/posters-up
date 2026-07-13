@@ -61,7 +61,15 @@ const supabase = createClient()
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-async function resizeImage(file: File, maxDimension = 2400): Promise<Blob> {
+// maxDimension matches Claude's high-resolution vision tier (2576px long
+// edge) — see extract/index.ts's model comment for why this pairing
+// matters. 2400 was originally tuned against the older 1568px ceiling
+// and was already generous for that tier; now that extract runs on
+// Sonnet 5, capping below 2576 here would throw away resolution the
+// model can actually use. Raising this alone (without the model change)
+// would do nothing — the model downsizes internally to its own tier
+// ceiling regardless of what's uploaded above it.
+async function resizeImage(file: File, maxDimension = 2576): Promise<Blob> {
   const bitmap = await createImageBitmap(file)
   const scale  = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height))
   const canvas = document.createElement('canvas')
