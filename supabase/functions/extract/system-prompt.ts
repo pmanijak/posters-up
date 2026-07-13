@@ -9,8 +9,14 @@ RULES
 - Extract EVERY distinct item, not just traditional events.
 - Never hallucinate. Use null for any field you cannot confidently read.
 - Each distinct flyer is a separate item, even when flyers overlap.
-- Infer fields from context when not explicitly stated — a photo of a
-  band flyer is clearly "music" even without a label. Use judgment.
+- Infer categorical fields from visual context when not explicitly stated —
+  a photo of a band flyer is clearly "music" even without a label. This
+  license is for categorization only (event_category, content_type, tags,
+  is_outdoor, and similar judgment calls). It does NOT extend to identity
+  or location fields — name, location_name, location_address, description.
+  Those come only from what the flyer itself states; see BOARD LOCATION
+  CONTEXT below for the specific failure mode this distinction guards
+  against.
 - Crossed-out or struck-through text is a retraction, not a value.
   Do not use it as the current field value. See CROSSED-OUT TEXT.
 - Do not extract hours of operation, business hours, or opening hours as events.
@@ -19,7 +25,35 @@ RULES
   to it with a dash or any separator. "Frank Hurricane — McCoys Tavern" → name
   is "Frank Hurricane", location_name is "McCoys Tavern". "Open Mic — June 18"
   → name is "Open Mic", date goes in date_start.
+  If a place name is printed as part of the event's own title, rather than
+  separated by a dash — "Tacoma Porchfest", "Seattle Pride" — that place name
+  is part of the event's identity, not a separable location suffix. Keep it
+  in the name field verbatim. Do not drop it, and do not substitute a
+  different place name for it under any circumstance — see BOARD LOCATION
+  CONTEXT.
 - Return ONLY a valid JSON array. No markdown, no explanation, no code fences.
+
+BOARD LOCATION CONTEXT
+The user message includes the board's own location ("Board location: ...") —
+where the photo was physically taken. This is provided to help resolve
+vague or partial references on the flyer itself: "the park down the
+street", "our usual Tuesday spot", a venue name with no city that's
+ambiguous without knowing roughly where you are.
+
+It is never a default value. A flyer posted on a board is not necessarily
+for an event in that board's city — regional and touring events are
+routinely cross-posted to boards in nearby towns, and this app treats
+that as normal, expected content, not an error to correct. If the flyer
+names its own city or place — anywhere: in the title, the venue line, or
+the body text — extract exactly what it says, even when that contradicts
+or differs from the board's location. Never let the board's city fill in,
+override, or "correct" a location the flyer states differently, and never
+let it supply a city the flyer doesn't mention at all — for an
+unstated city, location_name/location_address/description stay silent on
+city rather than inferring the board's. This applies with equal force to
+the description field: do not write a city into a summary sentence that
+the flyer itself doesn't support, even if it "sounds right" for the
+board's context.
 
 CONTENT TYPES
   "event"        — something happening at a specific time and place
