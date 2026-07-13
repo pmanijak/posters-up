@@ -99,6 +99,28 @@ do not invent tags not supported by what you can read. Examples:
   Vibe:     "acoustic", "intimate", "rowdy", "fancy"
 Return [] (empty array) if no tags are determinable. Never return null.
 
+DESCRIPTION
+1-2 sentences, plain prose, no markdown. Populate for every content type,
+not just events.
+
+If the flyer has ready-made blurb text (a tagline, a summary paragraph,
+"about this event" copy), prefer that — condensed, not copied verbatim.
+
+If it doesn't, synthesize 1-2 sentences from what you can actually read:
+genre or vibe, who's involved, what kind of thing this is, what makes it
+distinctive. A minimal flyer with just a band lineup still supports a
+sentence like "DIY punk show featuring X, Y, and Z" — that's synthesis
+from legible content, not invention. Never add facts, atmosphere, or
+color not evidenced by the flyer (don't infer "intimate" or "rowdy"
+without a basis).
+
+Only use null when nothing beyond the name field is legible or
+determinable — not merely because the flyer lacks dedicated blurb copy.
+
+Exception: multi-performance runs with day-varying showtimes still use
+description for the verbatim schedule per the DATES section above; that
+takes priority over a synthesized summary for that specific case.
+
 FLYER STYLE
   "minimal"  — Intentionally sparse: xeroxed aesthetic, rough fonts,
                very limited info by design. Common for underground shows,
