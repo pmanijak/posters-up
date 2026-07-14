@@ -2,11 +2,11 @@
 @plugin "@tailwindcss/typography";
 
 /* Theme values live here as plain vars, one level below @theme inline, so
-   prefers-color-scheme has a seam to swap. Dark is the original palette --
-   surfaces, brand, and category colors stay byte-identical to what shipped
-   before light mode existed. --fg-2/--fg-3 were bumped one step up the ramp
-   in both themes to clear WCAG AA body-text contrast (4.5:1); --fg-3 was
-   previously failing at 3.29:1 dark / 3.67:1 light. */
+   prefers-color-scheme has a seam to swap. Surfaces, brand, and category
+   colors are byte-identical to the original dark palette. The --fg text ramp
+   was raised for accessibility: --fg-3 (muted) carries small body text and
+   metadata, so both --fg-2/--fg-3 were pushed well past the AA minimum toward
+   ~7:1 while keeping three visibly distinct steps. */
 :root {
 color-scheme: dark light;
 
@@ -16,8 +16,8 @@ color-scheme: dark light;
 --edge:        #2E3830;
 --edge-subtle: #3D4A41;
 --fg:          #E8E4DC;
---fg-2:        #A8B9AB;
---fg-3:        #8A9E8F;
+--fg-2:        #C2CEC4;
+--fg-3:        #A8B9AB;
 --accent:      #7A9E82;
 --brand:       #7A9E82;
 
@@ -55,8 +55,8 @@ color-scheme: dark light;
 --edge:        #DED8C9;
 --edge-subtle: #C7BFAD;
 --fg:          #22281F;
---fg-2:        #42503F;
---fg-3:        #5E6E60;
+--fg-2:        #374536;
+--fg-3:        #4E5D50;
 --accent:      #3E6B4C;
 --brand:       #3E6B4C;
 
