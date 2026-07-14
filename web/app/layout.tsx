@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Permanent_Marker } from "next/font/google";
 import "./globals.css";
 
@@ -24,6 +24,13 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://postersup.org"),
   title:        SITE_TITLE,
   description:  SITE_DESCRIPTION,
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: dark)',  color: '#1E2420' },
+    { media: '(prefers-color-scheme: light)', color: '#F5F2EA' },
+  ],
 };
 
 export default function RootLayout({

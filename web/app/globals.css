@@ -1,17 +1,102 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Theme values live here as plain vars, one level below @theme inline, so
+   prefers-color-scheme has a seam to swap. Dark is the original palette --
+   values must stay byte-identical to what shipped before light mode existed. */
+:root {
+  color-scheme: dark light;
+
+  --page:        #1E2420;
+  --card:        #252B27;
+  --raised:      #2E3830;
+  --edge:        #2E3830;
+  --edge-subtle: #3D4A41;
+  --fg:          #E8E4DC;
+  --fg-2:        #8A9E8F;
+  --fg-3:        #6B7D6E;
+  --accent:      #7A9E82;
+  --brand:       #7A9E82;
+
+  --danger:  #F08A7A;
+  --warn:    #E0B44E;
+  --success: #7AC49A;
+
+  /* Category colors -- kept as vars (not hex) so event-card/filter-bar/boards
+     can swap them per theme. Dark values copied verbatim from the original
+     CATEGORY_COLORS map in lib/categories.ts. */
+  --cat-music:         #D4956A;
+  --cat-film:          #7A9EC4;
+  --cat-theater:       #B48AC4;
+  --cat-dance:         #7ABDB4;
+  --cat-comedy:        #D4B86A;
+  --cat-spoken_word:   #9AB47A;
+  --cat-visual_art:    #C48AAA;
+  --cat-market:        #C4AA7A;
+  --cat-workshop:      #C4956A;
+  --cat-community:     #7AAAC4;
+  --cat-party:         #D4B86A;
+  --cat-fundraiser:    #C4A07A;
+  --cat-other:         #8A9E8F;
+  --cat-lecture:       #7A9EB4;
+  --cat-fitness:       #7AC49A;
+  --cat-support_group: #A49AC4;
+  --cat-default:       #8A9E8F;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --page:        #F5F2EA;
+    --card:        #FDFBF6;
+    --raised:      #EAE5D8;
+    --edge:        #DED8C9;
+    --edge-subtle: #C7BFAD;
+    --fg:          #22281F;
+    --fg-2:        #4E5D50;
+    --fg-3:        #77877A;
+    --accent:      #3E6B4C;
+    --brand:       #3E6B4C;
+
+    --danger:  #B03A24;
+    --warn:    #8A6210;
+    --success: #2E7D52;
+
+    --cat-music:         #9A5A22;
+    --cat-film:          #2F5C87;
+    --cat-theater:       #6B4380;
+    --cat-dance:         #256E66;
+    --cat-comedy:        #8A6E1C;
+    --cat-spoken_word:   #4E6B30;
+    --cat-visual_art:    #8A3E62;
+    --cat-market:        #7E6430;
+    --cat-workshop:      #8C5326;
+    --cat-community:     #2E6382;
+    --cat-party:         #8A6E1C;
+    --cat-fundraiser:    #825E33;
+    --cat-other:         #4C5C50;
+    --cat-lecture:       #33586E;
+    --cat-fitness:       #23764C;
+    --cat-support_group: #574C86;
+    --cat-default:       #4C5C50;
+  }
+}
+
 @theme inline {
-  --color-surface-page:   #1E2420;
-  --color-surface-card:   #252B27;
-  --color-surface-raised: #2E3830;
-  --color-edge:           #2E3830;
-  --color-edge-subtle:    #3D4A41;
-  --color-content-primary:   #E8E4DC;
-  --color-content-secondary: #8A9E8F;
-  --color-content-muted:     #6B7D6E;
-  --color-content-accent:    #7A9E82;
-  --color-brand:             #7A9E82;
+  --color-surface-page:   var(--page);
+  --color-surface-card:   var(--card);
+  --color-surface-raised: var(--raised);
+  --color-edge:           var(--edge);
+  --color-edge-subtle:    var(--edge-subtle);
+  --color-content-primary:   var(--fg);
+  --color-content-secondary: var(--fg-2);
+  --color-content-muted:     var(--fg-3);
+  --color-content-accent:    var(--accent);
+  --color-brand:             var(--brand);
+
+  --color-danger:  var(--danger);
+  --color-warn:    var(--warn);
+  --color-success: var(--success);
+
   --font-sans:  var(--font-geist-sans);
   --font-mono:  var(--font-geist-mono);
   --font-marker: var(--font-permanent-marker);

@@ -778,7 +778,7 @@ export default function UploadPage() {
             </div>
           )}
 
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          {error && <p className="text-sm text-danger">{error}</p>}
         </div>
       </div>
     </div>
@@ -1051,7 +1051,7 @@ export default function UploadPage() {
                 )}
 
                 {boardError && (
-                  <p className="text-xs text-red-400">{boardError}</p>
+                  <p className="text-xs text-danger">{boardError}</p>
                 )}
               </div>
             )}
@@ -1083,8 +1083,8 @@ export default function UploadPage() {
 function JobThumbnail({ job }: { job: JobState }) {
   const ringColor =
     job.status === 'uploading' || job.status === 'extracting' ? 'ring-content-secondary' :
-    job.status === 'complete'                                  ? 'ring-green-600/70' :
-    job.status === 'failed'                                    ? 'ring-red-500/70' :
+    job.status === 'complete'                                  ? 'ring-success/70' :
+    job.status === 'failed'                                    ? 'ring-danger/70' :
     'ring-transparent'
 
   return (
@@ -1105,7 +1105,7 @@ function JobThumbnail({ job }: { job: JobState }) {
           <span className="w-1.5 h-1.5 rounded-full bg-white/80" />
         )}
         {job.status === 'failed' && (
-          <span className="text-red-300 text-base leading-none drop-shadow font-bold">✗</span>
+          <span className="text-danger text-base leading-none drop-shadow font-bold">✗</span>
         )}
       </div>
     </div>
@@ -1126,7 +1126,7 @@ function JobResult({ job, jobNumber }: {
     return (
       <div className="px-4 py-3 space-y-1">
         {label && <p className="text-xs font-medium text-content-secondary">{label}</p>}
-        <p className="text-xs text-red-400">
+        <p className="text-xs text-danger">
           {job.uploadError ?? job.extractionError ?? 'Failed'}
         </p>
       </div>
@@ -1147,7 +1147,7 @@ function JobResult({ job, jobNumber }: {
 
       {/* Fast-path warnings from the extract function */}
       {job.warnings.map((w, i) => (
-        <p key={i} className="text-xs text-amber-400">⚠ {w}</p>
+        <p key={i} className="text-xs text-warn">⚠ {w}</p>
       ))}
 
       {job.sightings.length === 0 && (

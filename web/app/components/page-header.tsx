@@ -184,7 +184,7 @@ export function PageHeader({
             <div className="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-3 sm:flex-row sm:items-baseline sm:gap-6 sm:py-5">
 
               {/* Label */}
-              <span className="text-sm text-content shrink-0">
+              <span className="text-sm text-content-secondary shrink-0">
                 {!cityLabel ? "We couldn't detect your city:" : 'Where are you?'}
               </span>
 

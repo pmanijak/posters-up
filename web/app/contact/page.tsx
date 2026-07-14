@@ -171,10 +171,7 @@ export default function ContactPage() {
             </button>
 
             {status === 'error' && (
-              // No error/warning token exists in global.css yet — this is the one inline
-              // hex in the file. Worth adding e.g. --color-content-danger if error states
-              // show up elsewhere later.
-              <p className="text-sm text-center" style={{ color: '#C97A6D' }}>
+              <p className="text-sm text-center text-danger">
                 Something went wrong on our end — nothing was lost, just try again.
               </p>
             )}

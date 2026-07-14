@@ -40,29 +40,34 @@ export const CATEGORIES: { value: CategoryFilter; label: string }[] = [
 // cards but are intentionally excluded from the filter bar.
 type ExtendedCategory = EventCategory | 'lecture' | 'fitness' | 'support_group'
 
-export const CATEGORY_COLORS: Record<ExtendedCategory, string> = {
-  music:         '#D4956A',  // warm amber
-  film:          '#7A9EC4',  // slate blue
-  theater:       '#B48AC4',  // muted purple
-  dance:         '#7ABDB4',  // teal
-  comedy:        '#D4B86A',  // golden
-  spoken_word:   '#9AB47A',  // sage
-  visual_art:    '#C48AAA',  // dusty rose
-  market:        '#C4AA7A',  // tan
-  workshop:      '#C4956A',  // terracotta
-  community:     '#7AAAC4',  // sky
-  party:         '#D4B86A',  // golden
-  fundraiser:    '#C4A07A',  // sand
-  other:         '#8A9E8F',  // muted green
-  lecture:       '#7A9EB4',  // steel blue
-  fitness:       '#7AC49A',  // mint
-  support_group: '#A49AC4',  // lavender
+// Category colors live in globals.css as --cat-* vars (with a light-mode
+// override block) so they can swap with prefers-color-scheme instead of being
+// baked in as hex here. categoryColor() returns a var() reference, not a hex —
+// it is only ever valid inside a CSS property (e.g. style={{ color: ... }}),
+// never inside an SVG presentation attribute, since vars don't resolve there.
+const CATEGORY_VARS: Record<ExtendedCategory, string> = {
+  music:         'var(--cat-music)',
+  film:          'var(--cat-film)',
+  theater:       'var(--cat-theater)',
+  dance:         'var(--cat-dance)',
+  comedy:        'var(--cat-comedy)',
+  spoken_word:   'var(--cat-spoken_word)',
+  visual_art:    'var(--cat-visual_art)',
+  market:        'var(--cat-market)',
+  workshop:      'var(--cat-workshop)',
+  community:     'var(--cat-community)',
+  party:         'var(--cat-party)',
+  fundraiser:    'var(--cat-fundraiser)',
+  other:         'var(--cat-other)',
+  lecture:       'var(--cat-lecture)',
+  fitness:       'var(--cat-fitness)',
+  support_group: 'var(--cat-support_group)',
 }
 
-const CATEGORY_COLOR_DEFAULT = '#8A9E8F'
+const CATEGORY_COLOR_DEFAULT = 'var(--cat-default)'
 
 export function categoryColor(category: string | null): string {
   return category
-    ? (CATEGORY_COLORS[category as ExtendedCategory] ?? CATEGORY_COLOR_DEFAULT)
+    ? (CATEGORY_VARS[category as ExtendedCategory] ?? CATEGORY_COLOR_DEFAULT)
     : CATEGORY_COLOR_DEFAULT
 }

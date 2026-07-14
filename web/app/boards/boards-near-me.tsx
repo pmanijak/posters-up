@@ -9,7 +9,7 @@ import { createClient } from '@/lib/supabase'
 import { categoryColor } from '@/lib/categories'
 import { seenAgo, staleness } from '@/lib/dates'
 import { formatDistance } from '@/lib/format'
-import { hexToRgba } from '@/lib/utils/color'
+import { withAlpha } from '@/lib/utils/color'
 import { PageHeader } from '../components/page-header'
 import { CityPicker } from '../components/city-picker'
 import type { CityOption } from '../components/city-picker'
@@ -114,7 +114,7 @@ function BoardCard({
                     <span
                       key={cat}
                       className="text-xs px-1.5 py-0.5 rounded"
-                      style={{ color, background: hexToRgba(color, 0.12) }}
+                      style={{ color, background: withAlpha(color, 0.12) }}
                     >
                       {cat}
                     </span>

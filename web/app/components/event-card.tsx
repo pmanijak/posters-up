@@ -8,7 +8,7 @@ import { useSearchParams } from 'next/navigation'
 import { categoryColor } from '@/lib/categories'
 import { seenAgo, staleness, formatDate } from '@/lib/dates'
 import { sourceDomain } from '@/lib/format'
-import { hexToRgba } from '@/lib/utils/color'
+import { withAlpha } from '@/lib/utils/color'
 import type { EventRow, TalentEntry } from '@/lib/types/events'
 import type { TellMeMoreData, EnrichmentData } from '@/lib/types/enrichment'
 
@@ -277,7 +277,7 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
           {event.event_category && (
             <span
               className="text-xs shrink-0 font-medium px-2 py-0.5 rounded"
-              style={{ color: accentColor, background: hexToRgba(accentColor, 0.15) }}
+              style={{ color: accentColor, background: withAlpha(accentColor, 0.15) }}
             >
               {event.event_category.replace('_', ' ')}
             </span>
@@ -294,8 +294,8 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
             className="underline underline-offset-2 decoration-2 hover:[text-decoration-color:var(--link-deco-hover)]"
             style={{
               color: accentColor,
-              textDecorationColor: hexToRgba(accentColor, 0.35),
-              '--link-deco-hover': hexToRgba(accentColor, 0.85),
+              textDecorationColor: withAlpha(accentColor, 0.35),
+              '--link-deco-hover': withAlpha(accentColor, 0.85),
             } as React.CSSProperties}
           >
             {event.name}
@@ -355,7 +355,7 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
                 className="text-xs px-2 py-0.5 rounded-full transition-colors"
                 style={
                   tagIsActive(tag)
-                    ? { background: hexToRgba(accentColor, 0.15), color: accentColor }
+                    ? { background: withAlpha(accentColor, 0.15), color: accentColor }
                     : { background: 'var(--color-surface-raised)', color: 'var(--color-content-muted)' }
                 }
               >
@@ -470,7 +470,7 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
                     </ul>
                   </div>
                 ) : data ? (
-                  <p className="text-xs text-red-400/50">board data unavailable</p>
+                  <p className="text-xs text-danger/50">board data unavailable</p>
                 ) : null}
               </>
             )}

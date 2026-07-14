@@ -197,7 +197,7 @@ export default function AccountPage() {
                 </div>
               )}
 
-              {error && <p className="text-sm text-red-400">{error}</p>}
+              {error && <p className="text-sm text-danger">{error}</p>}
             </>
 
           ) : (
@@ -218,7 +218,7 @@ export default function AccountPage() {
                     <button
                       onClick={deleteAccount}
                       disabled={deletingAccount}
-                      className="text-xs text-red-400 underline hover:text-red-300 disabled:opacity-50"
+                      className="text-xs text-danger underline hover:text-danger/80 disabled:opacity-50"
                     >
                       {deletingAccount ? 'Deleting…' : 'Yes, delete my account'}
                     </button>
@@ -233,13 +233,13 @@ export default function AccountPage() {
                 ) : (
                   <button
                     onClick={() => setConfirmingDelete(true)}
-                    className="text-xs text-red-400 underline hover:text-red-300"
+                    className="text-xs text-danger underline hover:text-danger/80"
                   >
                     Delete account
                   </button>
                 )}
 
-                {deleteError && <p className="text-xs text-red-400">{deleteError}</p>}
+                {deleteError && <p className="text-xs text-danger">{deleteError}</p>}
               </div>
             </div>
           )}

@@ -1,7 +1,7 @@
 'use client'
 // app/components/filter-bar.tsx
 import { CATEGORIES, categoryColor } from '@/lib/categories'
-import { hexToRgba } from '@/lib/utils/color'
+import { withAlpha } from '@/lib/utils/color'
 import { useFilters } from './filters-provider'
 
 interface FilterBarProps {
@@ -37,8 +37,8 @@ export function FilterBar({ activeCategory }: FilterBarProps) {
               isActive
                 ? {
                     color,
-                    background: hexToRgba(color, 0.15),
-                    border: `1px solid ${hexToRgba(color, 0.3)}`,
+                    background: withAlpha(color, 0.15),
+                    border: `1px solid ${withAlpha(color, 0.3)}`,
                   }
                 : {
                     color: 'var(--color-content-secondary)',
