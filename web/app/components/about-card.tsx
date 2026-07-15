@@ -19,8 +19,25 @@ export function AboutCard() {
           Anybody can add photos, so even if you&apos;re not in Olympia,
           it can work for you if you have lots of posters in your neighborhood.
         </p>
-        <div className="pt-0.5">
-          <Link href="/upload" className="text-xs text-content-secondary">
+        {/* Links styled like event-card tags */}
+        <div className="flex flex-wrap gap-1">
+          <Link
+            href="/privacy"
+            className="text-xs px-2 py-0.5 rounded-full bg-surface-raised text-content-muted transition-colors hover:text-content-secondary"
+          >
+            Privacy policy
+          </Link>
+          <Link
+            href="/contact"
+            className="text-xs px-2 py-0.5 rounded-full bg-surface-raised text-content-muted transition-colors hover:text-content-secondary"
+          >
+            Contact
+          </Link>
+        </div>
+
+        {/* Footer — mirrors event-card's Tell-me-more row */}
+        <div className="flex items-center justify-end mt-3 pt-2.5 border-t border-edge">
+          <Link href="/upload" className="text-xs text-content-muted">
             Submit a photo →
           </Link>
         </div>
