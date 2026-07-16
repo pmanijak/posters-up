@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 96 96" role="img" aria-label="Posters Up">
+  <!-- Favicon: just the up-arrow ("Up"), bold and full-bleed for 16px legibility. -->
+  <rect width="96" height="96" rx="16" fill="#7A9E82"/>
+  <path d="M48 68 V34 M32 48 L48 30 L64 48" fill="none" stroke="#E8E4DC"
+        stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

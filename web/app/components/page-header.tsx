@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { CITY_COOKIE } from '@/lib/constants'
 import type { CityOption } from './city-picker'
+import { LogoMark } from './logo'
 
 interface PageHeaderProps {
   cityLabel?:  string | null
@@ -137,9 +138,12 @@ export function PageHeader({
               {leftSlot !== undefined ? leftSlot : defaultLeftSlot}
             </div>
 
-            <h1 className="font-marker text-3xl text-content-primary text-center px-2">
-              <Link href="/">Posters Up</Link>
-            </h1>
+            <div className="flex items-center gap-4 px-2">
+              <LogoMark className="translate-y-[2px]" />
+              <h1 className="font-marker text-3xl text-content-primary">
+                <Link href="/">Posters Up</Link>
+              </h1>
+            </div>
 
             <div className="flex justify-end">
               {rightSlot !== undefined ? rightSlot : defaultRightSlot}
