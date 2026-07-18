@@ -9,7 +9,7 @@ export function LogoMark({ size = 42, className = "" }: { size?: number; classNa
         alt="Posters Up Logo"
         width={size}
         height={size}
-        className={`hidden dark:block ${className}`}
+        className={`hidden dark:inline-block align-middle ${className}`}
       />
       <Image
         src="/icons/postersup-icon-light.svg"
@@ -17,7 +17,7 @@ export function LogoMark({ size = 42, className = "" }: { size?: number; classNa
         aria-hidden="true"
         width={size}
         height={size}
-        className={`block dark:hidden ${className}`}
+        className={`inline-block dark:hidden align-middle ${className}`}
       />
     </>
   );
