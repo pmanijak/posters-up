@@ -1,12 +1,17 @@
 'use client'
 
 import Link from 'next/link'
+import { LogoMark } from './logo'
 
 export function AboutCard() {
   return (
     <div className="rounded-sm border border-dashed border-edge">
       <div className="px-4 py-3 space-y-3">
-        <h2 className="font-marker text-xl text-content-primary">About Posters Up</h2>
+        {/* Mark + title. size 28 suits text-xl; gap ~⅓ of the mark's width. */}
+        <div className="flex items-center gap-2.5">
+          <h2 className="font-marker text-xl text-content-primary">About Posters Up</h2>
+          <LogoMark size={28}/>
+        </div>
         <p className="text-sm leading-relaxed text-content-secondary">
           Hi. Thanks for visiting.
         </p>
