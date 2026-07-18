@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase'
+import { PageHeader } from '@/app/components/page-header'
 import { CATEGORY_MAP, categoryColor } from '@/lib/categories'
 import type { EventCategory } from '@/lib/categories'
 import exifr from 'exifr'
@@ -703,22 +704,21 @@ export default function UploadPage() {
 
   if (!user) return (
     <div className="min-h-screen bg-surface-page">
-      <header className="border-b border-edge">
-        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
-          <div className="grid grid-cols-[1fr_auto_1fr] items-center">
-            <div>
-              <Link href="/" className="text-xs text-content-muted hover:text-content-secondary transition-colors">
-                ← Events
-              </Link>
-            </div>
-            <h1 className="font-marker text-3xl text-content-primary text-center px-2">
-              <Link href="/">Posters Up</Link>
-            </h1>
-            <div />
-          </div>
-          <p className="text-sm mt-1 text-content-muted text-center">Sign in to submit photos</p>
-        </div>
-      </header>
+      <PageHeader
+        leftSlot={
+          <Link
+            href="/"
+            className="text-sm text-content-muted hover:text-content-secondary transition-colors whitespace-nowrap"
+          >
+            ← Events
+          </Link>
+        }
+        rightSlot={<div />}
+        subtitle="Sign in to submit photos"
+        cityLabel={null}
+        cities={[]}
+        isDetected={false}
+      />
 
       <div className="flex justify-center px-4 pt-16">
         <div className="w-full max-w-sm space-y-4">
@@ -789,24 +789,25 @@ export default function UploadPage() {
   return (
     <div className="min-h-screen bg-surface-page">
 
-      <header className="border-b border-edge">
-        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
-          <div className="grid grid-cols-[1fr_auto_1fr] items-center">
-            <div>
-              <Link href="/" className="text-xs text-content-muted hover:text-content-secondary transition-colors whitespace-nowrap">
-                ← Events
-              </Link>
-            </div>
-            <h1 className="font-marker text-3xl text-content-primary text-center px-2">
-              <Link href="/">Posters Up</Link>
-            </h1>
-            <div className="flex justify-end">
-              <span className="text-xs text-content-muted truncate max-w-[100px] sm:max-w-none">{user.email}</span>
-            </div>
-          </div>
-          <p className="text-sm mt-1 text-content-muted text-center">Submit a bulletin board photo</p>
-        </div>
-      </header>
+      <PageHeader
+        leftSlot={
+          <Link
+            href="/"
+            className="text-sm text-content-muted hover:text-content-secondary transition-colors whitespace-nowrap"
+          >
+            ← Events
+          </Link>
+        }
+        rightSlot={
+          <span className="text-xs text-content-muted truncate max-w-[100px] sm:max-w-none">
+            {user.email}
+          </span>
+        }
+        subtitle="Submit a bulletin board photo"
+        cityLabel={null}
+        cities={[]}
+        isDetected={false}
+      />
 
       <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
 
