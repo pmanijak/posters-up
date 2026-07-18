@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { CITY_COOKIE } from '@/lib/constants'
 import type { CityOption } from './city-picker'
-import { LogoMark } from './logo'
 
 interface PageHeaderProps {
   cityLabel?:  string | null
@@ -23,6 +22,12 @@ interface PageHeaderProps {
   // Boards page passes leftSlot="← Events", rightSlot="Submit photo".
   leftSlot?:   React.ReactNode
   rightSlot?:  React.ReactNode
+  // When true, the header spans full width (px-4, no max-w/mx-auto) instead
+  // of the default centered max-w-2xl column. Use for pages whose body is
+  // itself full-bleed (e.g. Boards' split list/map layout) so the header
+  // doesn't sit in a narrow box floating above a wider body. Default false —
+  // every centered-content page (home, event, contact) keeps the column.
+  fullBleed?:  boolean
 }
 
 type DetectState = 'idle' | 'detecting' | 'error'
@@ -35,6 +40,7 @@ export function PageHeader({
   onCityPick,
   leftSlot,
   rightSlot,
+  fullBleed = false,
 }: PageHeaderProps) {
   const [open, setOpen]               = useState(false)
   const [detectState, setDetectState] = useState<DetectState>('idle')
@@ -127,10 +133,14 @@ export function PageHeader({
     </Link>
   )
 
+  // Centered column by default (matches content pages); full-width for pages
+  // whose body is itself full-bleed (Boards) so header and body share an edge.
+  const containerClass = fullBleed ? 'px-4' : 'max-w-2xl mx-auto px-4'
+
   return (
     <div>
       <header>
-        <div className="max-w-2xl mx-auto px-4 pt-3 pb-2">
+        <div className={`${containerClass} pt-3 pb-2`}>
 
           {/* Nav bar: left action | brand (centered) | right action */}
           <div className="grid grid-cols-[1fr_auto_1fr] items-center">
@@ -138,12 +148,9 @@ export function PageHeader({
               {leftSlot !== undefined ? leftSlot : defaultLeftSlot}
             </div>
 
-            <div className="flex items-center gap-4 px-2">
-              <LogoMark className="translate-y-[2px]" />
-              <h1 className="font-marker text-3xl text-content-primary">
-                <Link href="/">Posters Up</Link>
-              </h1>
-            </div>
+            <h1 className="font-marker text-3xl text-content-primary text-center px-2">
+              <Link href="/">Posters Up</Link>
+            </h1>
 
             <div className="flex justify-end">
               {rightSlot !== undefined ? rightSlot : defaultRightSlot}
@@ -185,7 +192,7 @@ export function PageHeader({
       >
         <div style={{ overflow: 'hidden' }}>
           <div className="border-y border-edge mb-3">
-            <div className="max-w-2xl mx-auto px-4 py-4 flex flex-col gap-3 sm:flex-row sm:items-baseline sm:gap-6 sm:py-5">
+            <div className={`${fullBleed ? 'px-4' : 'max-w-2xl mx-auto px-4'} py-4 flex flex-col gap-3 sm:flex-row sm:items-baseline sm:gap-6 sm:py-5`}>
 
               {/* Label */}
               <span className="text-sm text-content-secondary shrink-0">

@@ -278,6 +278,7 @@ export default function BoardsNearMe({
         isDetected={locationState === 'granted'}
         subtitle="Bulletin boards around"
         onCityPick={handleCityPick}
+        fullBleed
         leftSlot={
           <Link
             href="/"
