@@ -223,8 +223,14 @@ async function fetchUpcoming(boardIds: string[], windowDays: number): Promise<Ev
 
   // events_for_boards returns SETOF events_public with no date filtering —
   // apply the same in-window logic here that the direct query used to do.
+  // Only `recurring` (no fixed date by nature) and events with no date_start
+  // at all are exempt from the window check. `approximate`/`unknown` events
+  // that DO have a date_start still need to pass it — otherwise a one-off
+  // event with a fuzzy-but-real date lingers indefinitely past its date,
+  // bounded only by event_is_stale()'s last_sighted_at clock instead of
+  // by the date it's actually for.
   const inWindow = (e: EventRow): boolean => {
-    if (e.date_type !== 'specific') return true
+    if (e.date_type === 'recurring') return true
     if (!e.date_start) return true
     if (e.date_start > windowEnd) return false
     return e.date_end ? e.date_end >= today : e.date_start >= today
