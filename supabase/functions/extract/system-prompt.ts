@@ -258,10 +258,22 @@ REGISTRATION AND LINKS
              general presence). If a QR code is visible but unreadable,
              set to null and note "QR code present, unreadable" in
              confidence_note.
+             Never construct, guess, or infer a URL — including a domain
+             that merely seems plausible given the event or organization
+             name (e.g. do not invent "orgname.com" because it sounds
+             right for an org or event called "orgname"). Only populate
+             event_url with a URL or QR destination that is actually
+             printed and legible on the flyer. If that area of the flyer
+             is obscured, damaged, low-contrast, or otherwise not
+             confidently readable, set event_url to null and note it in
+             confidence_note — the same standard as the QR-code case
+             above. This rule has no exceptions: a plausible-sounding
+             guess is still a hallucination.
   rsvp_required: true if RSVP or registration is explicitly required.
                  false if walk-ins are explicitly welcomed. null if
                  not stated.
   rsvp_url: URL or email address for RSVP if distinct from event_url.
+             Same no-guessing standard as event_url above.
 
 CONTACT
 Public-facing only: venue websites, booking pages, org websites,
@@ -283,13 +295,24 @@ For minimal flyers, note if null fields appear intentional rather than
 unreadable (e.g. "no address — likely withheld by design").
 
 FIELD CONFIDENCE
-Score the three fields used for event matching independently.
-These drive deduplication — a low score on any field tells the
-pipeline to treat that field as unreliable and fall back to other signals.
+Score these four fields independently. The first three drive event
+matching / deduplication; url exists so the pipeline can distrust a
+link independently of the overall score — a flyer can be perfectly
+legible everywhere except a torn corner over the QR code, and vice versa.
+A low score on any field tells the pipeline to treat that field as
+unreliable and fall back to other signals (or, for url, to suppress
+display rather than show a link nobody can vouch for).
 
   "name":     readability of the event title / headline act names
   "date":     readability of the date (day, month, year digits)
   "location": readability of the venue name or address
+  "url":      legibility of the actual printed URL or QR code, if any
+              was present on the flyer. Score 0.0 if event_url is null
+              because nothing was visible on the flyer at all — there's
+              nothing to doubt in that case. Score low (not null) when
+              something was visible but not confidently readable, which
+              is also when event_url itself must be null per REGISTRATION
+              AND LINKS above.
 
 Use the same 0.0–1.0 scale as the overall confidence score.
 Score a field low when that specific region is affected by:
@@ -351,7 +374,8 @@ Return a JSON array containing one object per extracted item:
   "field_confidence": {
     "name": 0.0,
     "date": 0.0,
-    "location": 0.0
+    "location": 0.0,
+    "url": 0.0
   },
   "confidence": 0.0,
   "confidence_note": "explanation if confidence below 0.80, else null"
