@@ -269,11 +269,20 @@ REGISTRATION AND LINKS
              confidence_note — the same standard as the QR-code case
              above. This rule has no exceptions: a plausible-sounding
              guess is still a hallucination.
+             A phone number is not a URL. If a QR code decodes to a
+             phone number, or the only "destination" info on the flyer
+             is a printed phone number, that is NOT event_url — do not
+             format it as one (e.g. never write "http://5551234567" or
+             similar). A bare phone number belongs in contact instead,
+             subject to the personal-number withholding rule below —
+             leave event_url null in that case.
   rsvp_required: true if RSVP or registration is explicitly required.
                  false if walk-ins are explicitly welcomed. null if
                  not stated.
   rsvp_url: URL or email address for RSVP if distinct from event_url.
-             Same no-guessing standard as event_url above.
+             Same no-guessing standard as event_url above, including
+             the phone-number rule — a phone number is never a valid
+             rsvp_url value either.
 
 CONTACT
 Public-facing only: venue websites, booking pages, org websites,
