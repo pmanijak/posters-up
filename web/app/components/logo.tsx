@@ -9,6 +9,7 @@ export function LogoMark({ size = 42, className = "" }: { size?: number; classNa
         alt="Posters Up Logo"
         width={size}
         height={size}
+        style={{ width: size, height: size }}
         className={`hidden dark:inline-block align-middle ${className}`}
       />
       <Image
@@ -17,6 +18,7 @@ export function LogoMark({ size = 42, className = "" }: { size?: number; classNa
         aria-hidden="true"
         width={size}
         height={size}
+        style={{ width: size, height: size }}
         className={`inline-block dark:hidden align-middle ${className}`}
       />
     </>
