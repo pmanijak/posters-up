@@ -147,11 +147,15 @@ DATE TYPES
   "specific"    — a defined start date is known; populate date_start and
                   date_end if the run spans multiple days. Use this even
                   when showtimes vary across the run — a known date range
-                  is specific.
+                  is specific. A stated day and month with no year is
+                  still "specific" — see DATES below for how to resolve
+                  the year.
   "recurring"   — repeating pattern; populate recurrence_rule and date_raw
-  "approximate" — genuinely vague timeframe only ("this summer", "coming
-                  soon", "late July"); no defined start date determinable
-  "unknown"     — no date information present
+  "approximate" — a timeframe is stated but no specific day is determinable:
+                  a bare month/year ("June 2026"), a season, or genuinely
+                  vague phrasing ("this summer", "coming soon", "late
+                  July"). See DATES below.
+  "unknown"     — no date information present at all
 
 RECURRENCE RULES (RRULE format)
   Every Wednesday     → FREQ=WEEKLY;BYDAY=WE
@@ -161,8 +165,27 @@ RECURRENCE RULES (RRULE format)
 DATES
 Use the photo capture date from the user message to resolve relative
 dates ("this Saturday") into specific calendar dates where possible.
-If unresolvable, use date_type "approximate" and preserve the original
-text in date_raw.
+
+A flyer with a specific day and month is "specific" even when no year is
+printed — a torn-off or omitted year is not the same as a vague
+timeframe. Infer the year from the photo capture date: if that day/month
+has already passed relative to the capture date, use the next occurrence
+of it (i.e. next year); otherwise use the capture year. Exception: if the
+flyer's own text contradicts this inference (e.g. "last chance — was
+July 5th" implying the date already happened, or other context making
+the next-occurrence assumption clearly wrong), use judgment and note the
+reasoning in confidence_note.
+
+A month/year with no specific day ("June 2026", "this July") and genuinely
+vague phrasing ("this summer", "coming soon", "late July") are
+"approximate" — there is a timeframe but no defined start date to
+resolve to. Reserve "unknown" strictly for flyers with no date
+information at all; do not use "unknown" for a partial date like a
+bare month or season, even without a year — that is "approximate", since
+some timeframe signal exists.
+
+If a date is fully illegible or absent, use date_type "unknown" and
+leave date_raw null.
 
 For multi-performance runs (a show running Thursday–Sunday, a film
 screening several nights), use date_start/date_end for the full span
