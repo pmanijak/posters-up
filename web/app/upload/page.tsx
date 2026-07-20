@@ -771,6 +771,22 @@ export default function UploadPage() {
       <div className="flex justify-center px-4 pt-16">
         <div className="w-full max-w-sm space-y-4">
 
+          <p className="text-sm leading-relaxed text-content-secondary">
+            We don't have user accounts, but we ask for your email address to keep submissions accountable.
+          </p>
+
+          <div className="flex items-center flex-wrap gap-x-1.5 gap-y-1 text-xs text-content-muted">
+            <span className={step === 'email' ? 'text-content-secondary font-medium' : ''}>
+              Enter your email
+            </span>
+            <span>→</span>
+            <span className={step === 'code' ? 'text-content-secondary font-medium' : ''}>
+              Confirm your sign-in code
+            </span>
+            <span>→</span>
+            <span>Upload your photos</span>
+          </div>
+
           {step === 'email' ? (
             <div className="space-y-3">
               <input
