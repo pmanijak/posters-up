@@ -20,26 +20,32 @@
 // just flagged with what checking it actually returned.
 //
 // Status semantics (event_url_status / rsvp_url_status):
-//   null        — unchecked, or not applicable (rsvp_url is an email, not
-//                 a URL; event_url doesn't parse as a checkable host at all)
+//   null        — unchecked yet, or not applicable in a way that's genuinely
+//                 fine (rsvp_url is an email address, not a URL — that's a
+//                 valid RSVP mechanism, not a data problem)
+//   'malformed' — the stored value isn't a URL and doesn't even look like a
+//                 bare host (e.g. an "@handle", stray OCR garbage). This is
+//                 a real data-quality signal, distinct from "not applicable":
+//                 event_url should never be a bare handle, so this is a flag
+//                 for cleanup, not a shrug.
 //   '200'..'599' — the final HTTP status code, as text, after following redirects
 //   'timeout'   — request did not complete within FETCH_TIMEOUT_MS
 //   'unreachable' — DNS failure, connection refused, TLS failure (no HTTP
 //                   response was ever received)
-// The raw code is stored as-is; this function does not judge which codes
-// mean "broken" — a 403 or 429 is as often bot-blocking (Facebook and
+// The raw HTTP code is stored as-is; this function does not judge which
+// codes mean "broken" — a 403 or 429 is as often bot-blocking (Facebook and
 // Eventbrite both do this to non-browser requests) as an actually-dead
 // page, and that call belongs to whoever renders the link, not the check.
 //
 // Scheme handling: flyers routinely print bare domains ("thecarpenters.house")
 // with no "https://" — that's normal OCR output, not a malformed value.
 // normalizeForCheck() adds a scheme for the outbound request only; the
-// stored event_url/rsvp_url is never rewritten. Values that don't even
-// look like a host (e.g. a bare "@handle") are left unchecked and the
-// field is still stamped as checked-but-not-applicable, the same way a
-// non-URL rsvp_url (an email address) already was — otherwise the queue
-// query re-selects them every run forever, since a null *_checked_at is
-// exactly what it selects on.
+// stored event_url/rsvp_url is never rewritten — this function still only
+// ever annotates, per the design principle above. A value that doesn't
+// even look like a host is what gets 'malformed'. Either way the field's
+// *_checked_at is always stamped once we've made a decision about it,
+// otherwise the queue query — which selects on a null/stale *_checked_at —
+// would re-select the same rows forever.
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -95,6 +101,16 @@ function normalizeForCheck(value: string | null): string | null {
   if (isHttpUrl(value)) return value;
   if (BARE_HOST_RE.test(value)) return `https://${value}`;
   return null;
+}
+
+// rsvp_url legitimately holds a plain email address in this schema — that's
+// a valid, checkable-by-a-human RSVP mechanism, not a data problem. Kept
+// deliberately simple: this only needs to rule out "malformed", not
+// validate deliverability.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isEmailAddress(value: string): boolean {
+  return EMAIL_RE.test(value);
 }
 
 // Returns the outcome of checking a URL, as the exact string that gets
@@ -215,7 +231,9 @@ Deno.serve(async (req: Request) => {
     // with it, whether or not it turned out to be checkable — otherwise
     // a value that never resolves to a checkable target (an @handle,
     // garbage OCR output) gets silently re-selected by the queue query
-    // on every single run, forever.
+    // on every single run, forever. event_url has no "this is fine, it's
+    // just not a URL" case the way rsvp_url does (no email-address
+    // exemption), so anything that doesn't normalize is a real flag.
     if (event.event_url) {
       const checkTarget = normalizeForCheck(event.event_url);
       update.event_url_checked_at = now;
@@ -225,9 +243,9 @@ Deno.serve(async (req: Request) => {
         counts.checked++;
         bump(status);
       } else {
-        // Doesn't parse as a URL and doesn't look like a bare host either
-        // (e.g. "@thebrotherhood") — not applicable, not unchecked.
-        counts.skipped++;
+        update.event_url_status = "malformed";
+        counts.checked++;
+        bump("malformed");
       }
     }
 
@@ -239,11 +257,16 @@ Deno.serve(async (req: Request) => {
         update.rsvp_url_status = status;
         counts.checked++;
         bump(status);
-      } else {
-        // Non-URL rsvp_url (an email address) — stamp checked so it
-        // doesn't get re-selected by the queue query every run, but
-        // leave rsvp_url_status null: "not applicable", not "unchecked".
+      } else if (isEmailAddress(event.rsvp_url)) {
+        // Valid RSVP mechanism, just not a URL — leave rsvp_url_status
+        // null: "not applicable", not "unchecked" and not "malformed".
         counts.skipped++;
+      } else {
+        // Neither a checkable URL/host nor a plausible email — genuinely
+        // bad data (garbage OCR, a bare handle, etc).
+        update.rsvp_url_status = "malformed";
+        counts.checked++;
+        bump("malformed");
       }
     }
 
