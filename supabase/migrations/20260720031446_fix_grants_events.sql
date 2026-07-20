@@ -1,0 +1,1 @@
+GRANT SELECT ON config TO anon, authenticated, service_role;
