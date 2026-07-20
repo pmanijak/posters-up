@@ -729,7 +729,8 @@ export default function UploadPage() {
   const activeJobs = jobs.filter(j => j.status === 'uploading' || j.status === 'extracting')
   const anySuccess = jobs.some(j => j.status === 'complete')
   const allSettled = jobs.length > 0 && jobs.every(j => j.status === 'complete' || j.status === 'failed')
-  const doneCount  = jobs.filter(j => j.status === 'complete' || j.status === 'failed').length
+  const doneCount   = jobs.filter(j => j.status === 'complete' || j.status === 'failed').length
+  const queuedCount = jobs.filter(j => j.status === 'queued').length
 
   // Board form is only meaningful for a single-photo upload: the contributor is
   // presumably at or near that one board. Multi-photo sessions are typically a
@@ -912,10 +913,13 @@ export default function UploadPage() {
 
               {!allSettled && (
                 <p className="text-xs text-content-muted">
-                  {activeJobs.length > 0
-                    ? `Processing ${activeJobs.length} of ${jobs.length}…`
-                    : `${doneCount} of ${jobs.length} done`
-                  }
+                  {/* Always leads with doneCount so the "of Y" figure only ever counts
+                      up — activeJobs.length is a snapshot of what's in flight right now,
+                      not a running total, so it reads as going backwards if it's the
+                      only number shown once something has already finished. */}
+                  {doneCount} of {jobs.length} done
+                  {activeJobs.length > 0 && ` · ${activeJobs.length} processing`}
+                  {queuedCount > 0 && ` · ${queuedCount} queued`}
                 </p>
               )}
             </div>
