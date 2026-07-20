@@ -20,7 +20,8 @@
 // just flagged with what checking it actually returned.
 //
 // Status semantics (event_url_status / rsvp_url_status):
-//   null        — unchecked, or not applicable (rsvp_url is an email, not a URL)
+//   null        — unchecked, or not applicable (rsvp_url is an email, not
+//                 a URL; event_url doesn't parse as a checkable host at all)
 //   '200'..'599' — the final HTTP status code, as text, after following redirects
 //   'timeout'   — request did not complete within FETCH_TIMEOUT_MS
 //   'unreachable' — DNS failure, connection refused, TLS failure (no HTTP
@@ -29,6 +30,16 @@
 // mean "broken" — a 403 or 429 is as often bot-blocking (Facebook and
 // Eventbrite both do this to non-browser requests) as an actually-dead
 // page, and that call belongs to whoever renders the link, not the check.
+//
+// Scheme handling: flyers routinely print bare domains ("thecarpenters.house")
+// with no "https://" — that's normal OCR output, not a malformed value.
+// normalizeForCheck() adds a scheme for the outbound request only; the
+// stored event_url/rsvp_url is never rewritten. Values that don't even
+// look like a host (e.g. a bare "@handle") are left unchecked and the
+// field is still stamped as checked-but-not-applicable, the same way a
+// non-URL rsvp_url (an email address) already was — otherwise the queue
+// query re-selects them every run forever, since a null *_checked_at is
+// exactly what it selects on.
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -63,6 +74,27 @@ function isHttpUrl(value: string | null): value is string {
   } catch {
     return false;
   }
+}
+
+// Bare-host shape: one or more dot-separated labels, optionally followed
+// by a path/query. Matches what a flyer would plausibly print without a
+// scheme ("thecarpenters.house", "www.slug-love.com/tickets"). Does NOT
+// match a single label with no dot (e.g. "@thebrotherhood", "thebrotherhood")
+// — those aren't hosts, they're handles or garbage, and should fall through
+// to "not applicable" rather than be guessed at.
+const BARE_HOST_RE =
+  /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(\/.*)?$/i;
+
+// Returns the URL to actually request, or null if the value isn't
+// checkable at all (not a URL, and doesn't look like a bare host either —
+// e.g. an @handle, or garbage OCR output). Never mutates or returns
+// anything that gets written back to event_url/rsvp_url — this is
+// strictly the outbound request target.
+function normalizeForCheck(value: string | null): string | null {
+  if (!value) return null;
+  if (isHttpUrl(value)) return value;
+  if (BARE_HOST_RE.test(value)) return `https://${value}`;
+  return null;
 }
 
 // Returns the outcome of checking a URL, as the exact string that gets
@@ -179,26 +211,40 @@ Deno.serve(async (req: Request) => {
   for (const event of events) {
     const update: Record<string, unknown> = {};
 
-    if (isHttpUrl(event.event_url)) {
-      const status = await checkUrl(event.event_url);
+    // event_url: always stamp checked_at once we've decided what to do
+    // with it, whether or not it turned out to be checkable — otherwise
+    // a value that never resolves to a checkable target (an @handle,
+    // garbage OCR output) gets silently re-selected by the queue query
+    // on every single run, forever.
+    if (event.event_url) {
+      const checkTarget = normalizeForCheck(event.event_url);
       update.event_url_checked_at = now;
-      update.event_url_status = status;
-      counts.checked++;
-      bump(status);
+      if (checkTarget) {
+        const status = await checkUrl(checkTarget);
+        update.event_url_status = status;
+        counts.checked++;
+        bump(status);
+      } else {
+        // Doesn't parse as a URL and doesn't look like a bare host either
+        // (e.g. "@thebrotherhood") — not applicable, not unchecked.
+        counts.skipped++;
+      }
     }
 
-    if (isHttpUrl(event.rsvp_url)) {
-      const status = await checkUrl(event.rsvp_url);
+    if (event.rsvp_url) {
+      const checkTarget = normalizeForCheck(event.rsvp_url);
       update.rsvp_url_checked_at = now;
-      update.rsvp_url_status = status;
-      counts.checked++;
-      bump(status);
-    } else if (event.rsvp_url) {
-      // Non-URL rsvp_url (an email address) — stamp checked so it
-      // doesn't get re-selected by the queue query every run, but
-      // leave rsvp_url_status null: "not applicable", not "unchecked".
-      update.rsvp_url_checked_at = now;
-      counts.skipped++;
+      if (checkTarget) {
+        const status = await checkUrl(checkTarget);
+        update.rsvp_url_status = status;
+        counts.checked++;
+        bump(status);
+      } else {
+        // Non-URL rsvp_url (an email address) — stamp checked so it
+        // doesn't get re-selected by the queue query every run, but
+        // leave rsvp_url_status null: "not applicable", not "unchecked".
+        counts.skipped++;
+      }
     }
 
     if (Object.keys(update).length > 0) {
