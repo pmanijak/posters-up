@@ -8,6 +8,7 @@ import { useSearchParams } from 'next/navigation'
 import { categoryColor } from '@/lib/categories'
 import { seenAgo, staleness, formatDate } from '@/lib/dates'
 import { sourceDomain } from '@/lib/format'
+import { isConfirmedBrokenUrl } from '@/lib/urls'
 import { withAlpha } from '@/lib/utils/color'
 import type { EventRow, TalentEntry } from '@/lib/types/events'
 import type { TellMeMoreData, EnrichmentData } from '@/lib/types/enrichment'
@@ -239,6 +240,11 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
   const linkHref = linkUrl
     ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
     : null
+  // Only event_url goes through check-urls — event.contact was never checked,
+  // so the broken-link treatment only applies when linkUrl actually came
+  // from event_url, not the contact fallback.
+  const linkIsBroken =
+    linkUrl === event.event_url && isConfirmedBrokenUrl(event.event_url_status)
 
   const collapsedLabel = (!isMinimal && event.has_enrichment)
     ? 'Tell me more ↓'
@@ -332,8 +338,10 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
           </p>
         )}
 
-        {/* Flyer link */}
-        {linkHref && (
+        {/* Flyer link — hidden when check-urls has confirmed it's dead,
+            rather than shown as disabled text. The flyer's other fields
+            (name, date, location) still display normally either way. */}
+        {linkHref && !linkIsBroken && (
           <a
             href={linkHref}
             target="_blank"

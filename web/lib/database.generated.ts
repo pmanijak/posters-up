@@ -12,8 +12,69 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.5"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
+      _migration_date_backfill_log: {
+        Row: {
+          date_raw: string | null
+          event_id: string
+          id: number
+          migrated_at: string | null
+          new_date_start: string | null
+          new_date_type: string | null
+          old_date_start: string | null
+          old_date_type: string | null
+          reason: string | null
+        }
+        Insert: {
+          date_raw?: string | null
+          event_id: string
+          id?: number
+          migrated_at?: string | null
+          new_date_start?: string | null
+          new_date_type?: string | null
+          old_date_start?: string | null
+          old_date_type?: string | null
+          reason?: string | null
+        }
+        Update: {
+          date_raw?: string | null
+          event_id?: string
+          id?: number
+          migrated_at?: string | null
+          new_date_start?: string | null
+          new_date_type?: string | null
+          old_date_start?: string | null
+          old_date_type?: string | null
+          reason?: string | null
+        }
+        Relationships: []
+      }
       board_flyers: {
         Row: {
           board_id: string
@@ -607,6 +668,8 @@ export type Database = {
           enrichment_status: string | null
           event_category: string | null
           event_url: string | null
+          event_url_checked_at: string | null
+          event_url_status: string | null
           expires_at: string | null
           first_sighted_at: string
           flyer_style: string | null
@@ -631,6 +694,8 @@ export type Database = {
           recurrence_rule: string | null
           rsvp_required: boolean | null
           rsvp_url: string | null
+          rsvp_url_checked_at: string | null
+          rsvp_url_status: string | null
           search_text: string | null
           sighting_count: number
           staleness_days: number | null
@@ -662,6 +727,8 @@ export type Database = {
           enrichment_status?: string | null
           event_category?: string | null
           event_url?: string | null
+          event_url_checked_at?: string | null
+          event_url_status?: string | null
           expires_at?: string | null
           first_sighted_at?: string
           flyer_style?: string | null
@@ -686,6 +753,8 @@ export type Database = {
           recurrence_rule?: string | null
           rsvp_required?: boolean | null
           rsvp_url?: string | null
+          rsvp_url_checked_at?: string | null
+          rsvp_url_status?: string | null
           search_text?: string | null
           sighting_count?: number
           staleness_days?: number | null
@@ -717,6 +786,8 @@ export type Database = {
           enrichment_status?: string | null
           event_category?: string | null
           event_url?: string | null
+          event_url_checked_at?: string | null
+          event_url_status?: string | null
           expires_at?: string | null
           first_sighted_at?: string
           flyer_style?: string | null
@@ -741,6 +812,8 @@ export type Database = {
           recurrence_rule?: string | null
           rsvp_required?: boolean | null
           rsvp_url?: string | null
+          rsvp_url_checked_at?: string | null
+          rsvp_url_status?: string | null
           search_text?: string | null
           sighting_count?: number
           staleness_days?: number | null
@@ -1299,6 +1372,7 @@ export type Database = {
           description: string | null
           event_category: string | null
           event_url: string | null
+          event_url_status: string | null
           first_sighted_at: string | null
           flyer_style: string | null
           has_enrichment: boolean | null
@@ -1319,6 +1393,7 @@ export type Database = {
           recurrence_rule: string | null
           rsvp_required: boolean | null
           rsvp_url: string | null
+          rsvp_url_status: string | null
           search_text: string | null
           sighting_count: number | null
           tags: string[] | null
@@ -1683,6 +1758,14 @@ export type Database = {
         Args: { p_date_type: string }
         Returns: number
       }
+      event_is_stale: {
+        Args: {
+          p_date_type: string
+          p_last_sighted_at: string
+          p_staleness_days?: number
+        }
+        Returns: boolean
+      }
       event_name_similarity: {
         Args: { p_a: string; p_b: string }
         Returns: number
@@ -1703,6 +1786,7 @@ export type Database = {
           description: string | null
           event_category: string | null
           event_url: string | null
+          event_url_status: string | null
           first_sighted_at: string | null
           flyer_style: string | null
           has_enrichment: boolean | null
@@ -1723,6 +1807,7 @@ export type Database = {
           recurrence_rule: string | null
           rsvp_required: boolean | null
           rsvp_url: string | null
+          rsvp_url_status: string | null
           search_text: string | null
           sighting_count: number | null
           tags: string[] | null
@@ -2041,6 +2126,7 @@ export type Database = {
           description: string | null
           event_category: string | null
           event_url: string | null
+          event_url_status: string | null
           first_sighted_at: string | null
           flyer_style: string | null
           has_enrichment: boolean | null
@@ -2061,6 +2147,7 @@ export type Database = {
           recurrence_rule: string | null
           rsvp_required: boolean | null
           rsvp_url: string | null
+          rsvp_url_status: string | null
           search_text: string | null
           sighting_count: number | null
           tags: string[] | null
@@ -2830,6 +2917,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {},
   },
