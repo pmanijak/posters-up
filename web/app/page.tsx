@@ -13,6 +13,7 @@ import { EventCard } from './components/event-card'
 import { EventFeed } from './components/event-feed'
 import { AboutCard } from './components/about-card'
 import { TagCard } from './components/tag-card'
+import { DisclaimerCard } from './components/disclaimer-card'
 import { CityPicker, type CityOption } from './components/city-picker'
 import { PageHeader } from './components/page-header'
 import { resolveLocation } from '@/lib/location'
@@ -208,6 +209,11 @@ export default async function DiscoverPage({
   // if the feed is too short, same pattern as AboutCard.
   const tagCardAt = aboutAt + 5
 
+  // DisclaimerCard sits at a fixed position — after the 3rd event — regardless
+  // of where About/Tag land. Falls through to end-of-list if the feed is shorter
+  // than that, same pattern as above.
+  const disclaimerAt = 3
+
   return (
     <div className="min-h-screen bg-surface-page">
 
@@ -265,11 +271,13 @@ export default async function DiscoverPage({
                         const cards = []
                         if (!isFiltered && i === aboutAt) cards.push(<AboutCard key="__about" />)
                         if (!isFiltered && !q && !tag && topTags.length >= 5 && i === tagCardAt) cards.push(<TagCard key="__tags" tags={topTags} />)
+                        if (!isFiltered && i === disclaimerAt) cards.push(<DisclaimerCard key="__disclaimer" />)
                         cards.push(<EventCard key={event.id} event={event} />)
                         return cards
                       })}
                       {!isFiltered && aboutAt >= eventList.length && <AboutCard key="__about" />}
                       {!isFiltered && !q && !tag && topTags.length >= 5 && tagCardAt >= eventList.length && <TagCard key="__tags" tags={topTags} />}
+                      {!isFiltered && disclaimerAt >= eventList.length && <DisclaimerCard key="__disclaimer" />}
                       <p className="text-center text-xs pt-4 text-content-muted">
                         {eventList.length} event{eventList.length !== 1 ? 's' : ''}
                         {!q && category && category !== 'all' ? ` · ${category}` : ''}
