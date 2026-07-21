@@ -236,15 +236,18 @@ export function EventCard({ event, defaultExpanded = false }: { event: EventRow;
   if (event.age_restriction)   detailParts.push(event.age_restriction)
   if (event.organization_name) detailParts.push(event.organization_name)
 
-  const linkUrl  = event.event_url ?? event.contact
+  // Only event_url — never event.contact. These are different things:
+  // event_url is this event's own page, contact is the organizer's general
+  // presence (venue site, phone, email, social handle). Falling back to
+  // contact meant a bare "@handle" became `https://@handle`, which parses
+  // without error (the @ reads as empty userinfo) and rendered as a
+  // confident, dead link. When there's no event_url the honest answer is
+  // no link — the board-finder below is the better answer anyway.
+  const linkUrl  = event.event_url
   const linkHref = linkUrl
     ? linkUrl.startsWith('http') ? linkUrl : `https://${linkUrl}`
     : null
-  // Only event_url goes through check-urls — event.contact was never checked,
-  // so the broken-link treatment only applies when linkUrl actually came
-  // from event_url, not the contact fallback.
-  const linkIsBroken =
-    linkUrl === event.event_url && isConfirmedBrokenUrl(event.event_url_status)
+  const linkIsBroken = isConfirmedBrokenUrl(event.event_url_status)
 
   const collapsedLabel = (!isMinimal && event.has_enrichment)
     ? 'Tell me more ↓'
