@@ -1,5 +1,5 @@
 // app/events/[id]/calendar/route.ts
-import { createClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase-server'
 import { NextResponse } from 'next/server'
 
 // Stateless — create once at module level rather than per fold() call.
@@ -68,7 +68,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const supabase = createClient()
+  const supabase = createPublicClient()
 
   const { data: event, error } = await supabase
     .from('events_public')

@@ -15,7 +15,7 @@
 // no evidence it's needed yet.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase'
+import { createPublicClient } from '@/lib/supabase-server'
 
 const CATEGORIES = ['bug', 'wrong_info', 'takedown', 'feedback', 'other'] as const
 type Category = (typeof CATEGORIES)[number]
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
   // Reuses the same client helper the rest of the app uses (lib/supabase.ts),
   // so it's typed against Database and picks up NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY
   // rather than a key name this route would otherwise have invented on its own.
-  const supabase = createClient()
+  const supabase = createPublicClient()
 
   const { error } = await supabase.from('contact_messages').insert({
     email: body.email?.trim() || null,

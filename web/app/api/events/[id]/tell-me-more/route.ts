@@ -15,14 +15,11 @@
 // Auth: uses SUPABASE_TELL_ME_MORE_KEY (service role scoped key).
 // The key scope is not the real access control — the sanitization here is.
 
-import { createClient } from "@supabase/supabase-js";
+import { createScopedClient } from "@/lib/supabase-server";
 import { NextResponse } from "next/server";
 import type { EnrichmentData } from "@/lib/types/enrichment";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_TELL_ME_MORE_KEY!
-);
+const supabase = createScopedClient();
 
 // Patterns that indicate a personal contact rather than a public-facing URL.
 // A phone number or personal email should never reach the client.
@@ -88,7 +85,9 @@ export async function GET(
     console.error(`tell-me-more enrichment error for ${eventId}:`, sightingError);
   }
 
-  const rawEnrichment = sighting?.enrichment_data as EnrichmentData | null;
+  // JSONB comes back as Json | null — the schema can't know the shape, so the
+  // cast goes through unknown (see type-best-practices.md).
+  const rawEnrichment = sighting?.enrichment_data as unknown as EnrichmentData | null;
 
   // Discard old-format enrichment data that predates the new shape.
   // Old format stored everything inside found{} with no top-level description,
