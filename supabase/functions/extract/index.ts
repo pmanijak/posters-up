@@ -1,25 +1,44 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SYSTEM_PROMPT } from "./system-prompt.ts";
 import { claimAndDispatch } from "../_shared/claimAndDispatch.ts";
+import { requireEnv } from "../_shared/env.ts";
+import { EXTRACT_MODEL } from "../_shared/models.ts";
+import { CORS_HEADERS, errorMessage } from "../_shared/http.ts";
 
 // EdgeRuntime is a Supabase Edge Runtime global — not available in standard Deno.
 // waitUntil() keeps the function alive after the response is sent.
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
 
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_EXTRACT_API_KEY")!;
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ANTHROPIC_EXTRACT_API_KEY = requireEnv("ANTHROPIC_EXTRACT_API_KEY");
+const SUPABASE_URL = requireEnv("SUPABASE_URL");
+const SUPABASE_SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 const EXTRACT_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/extract`;
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type SupabaseClient = ReturnType<typeof createClient>;
+
+// Shape of the board_flyers -> events join used to build the "known events on
+// this board" hint passed to the extraction prompt. The Supabase client here
+// is untyped (no Database generic on the edge side), so the join result has to
+// be described locally.
+interface BoardFlyerJoin {
+  events: { name: string | null; date_start: string | null } | null;
+}
+
+interface KnownEvent {
+  name: string;
+  date_start: string | null;
+}
+
+// Reply to a photo submission from the upload client.
+interface SubmitResponse {
+  success:  true;
+  photo_id: string;
+  board_id: string | null;
+  warnings?: string[];
+}
 
 // Request body from the upload client.
 // photo_path and capture_date come from the upload page after EXIF extraction.
@@ -90,7 +109,7 @@ interface ExtractedItem {
 function respond(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
   });
 }
 
@@ -326,7 +345,7 @@ async function runExtraction(
 
     // ── Board context + coordinates ─────────────────────────────────────────
     let boardDescription: string | null = null;
-    let knownEvents: { name: string; date_start: string | null }[] | null = null;
+    let knownEvents: KnownEvent[] | null = null;
     let lat: number | null = null;
     let lng: number | null = null;
 
@@ -367,12 +386,12 @@ async function runExtraction(
       if (flyersError) {
         console.warn(`Could not fetch known board events: ${flyersError.message}`);
       } else if (flyers?.length) {
-        knownEvents = flyers
-          .map((f: any) => ({
+        knownEvents = (flyers as BoardFlyerJoin[])
+          .map((f) => ({
             name: f.events?.name,
             date_start: f.events?.date_start,
           }))
-          .filter((e: any) => e.name);
+          .filter((e): e is KnownEvent => Boolean(e.name));
       }
     }
 
@@ -389,7 +408,7 @@ async function runExtraction(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
+        "x-api-key": ANTHROPIC_EXTRACT_API_KEY,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
@@ -406,7 +425,7 @@ async function runExtraction(
         // information-loss-before-the-model-ever-saw-it failure. No cost
         // tradeoff at time of writing — Sonnet 5 intro pricing ($2/$10) is
         // at or below Sonnet 4.6's standard rate ($3/$15).
-        model: "claude-sonnet-5",
+        model: EXTRACT_MODEL,
         // Sonnet 5 runs adaptive thinking by default when this field is
         // omitted — a behavior change from 4.6, where omitting it meant no
         // thinking. Explicitly disabled here: this is a deterministic
@@ -464,9 +483,9 @@ async function runExtraction(
     try {
       extractedItems = JSON.parse(extractJson(rawText)) as ExtractedItem[];
       if (!Array.isArray(extractedItems)) throw new Error("Response was not a JSON array");
-    } catch (parseErr: any) {
+    } catch (parseErr) {
       console.error("Claude response parse failed. Raw text:", rawText.slice(0, 500));
-      throw new Error(`Failed to parse extraction response: ${parseErr.message}`);
+      throw new Error(`Failed to parse extraction response: ${errorMessage(parseErr)}`);
     }
 
     console.log(`Claude extracted ${extractedItems.length} items for photo ${photoId}`);
@@ -734,7 +753,7 @@ async function runExtraction(
           }
         }
 
-      } catch (itemErr: any) {
+      } catch (itemErr) {
         console.error(`Unhandled error processing item "${item.name ?? "(unnamed)"}":`, itemErr);
       }
     }
@@ -795,13 +814,13 @@ async function runExtraction(
 
     console.log(`Extraction complete for photo ${photoId}`);
 
-  } catch (err: any) {
+  } catch (err) {
     console.error(`runExtraction failed for photo ${photoId}:`, err);
     await supabase
       .from("photos")
       .update({
         extraction_status: "failed",
-        extraction_error: err?.message ?? String(err),
+        extraction_error: errorMessage(err),
       })
       .eq("id", photoId);
   }
@@ -874,7 +893,7 @@ async function dispatchExtraction(photoId: string, supabase: SupabaseClient): Pr
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response("ok", { headers: CORS_HEADERS });
   }
 
   if (req.method !== "POST") {
@@ -1062,7 +1081,7 @@ Deno.serve(async (req) => {
     })
   );
 
-  const response: any = {
+  const response: SubmitResponse = {
     success: true,
     photo_id: photoRecord.id,
     board_id: resolvedBoardId,

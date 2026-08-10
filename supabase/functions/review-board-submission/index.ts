@@ -1,8 +1,14 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireEnv } from "../_shared/env.ts";
+import { BOARD_REVIEW_MODEL } from "../_shared/models.ts";
 
-const ANTHROPIC_API_KEY        = Deno.env.get("ANTHROPIC_API_KEY")!;
-const SUPABASE_URL             = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+// NOTE: this is the only function reading the unqualified ANTHROPIC_API_KEY.
+// extract/enrich/resolve-talent-name each use a per-purpose secret
+// (ANTHROPIC_EXTRACT_API_KEY / ANTHROPIC_ENRICH_API_KEY). Left as-is because
+// renaming it means rotating a deployed secret, not just editing code.
+const ANTHROPIC_API_KEY         = requireEnv("ANTHROPIC_API_KEY");
+const SUPABASE_URL              = requireEnv("SUPABASE_URL");
+const SUPABASE_SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 
 // ============================================================
 // TYPES
@@ -100,7 +106,7 @@ Return ONLY valid JSON. No markdown, no explanation, no code fences.
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model:      "claude-sonnet-4-6",
+      model:      BOARD_REVIEW_MODEL,
       max_tokens: 300,
       messages: [{ role: "user", content: prompt }],
     }),

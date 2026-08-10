@@ -1,24 +1,21 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireEnv } from "../_shared/env.ts";
+import { TALENT_REVIEW_MODEL } from "../_shared/models.ts";
+import {
+  type AnthropicResponse,
+  isToolUseBlock,
+  usedWebSearch as responseUsedWebSearch,
+} from "../_shared/anthropic.ts";
+import { CORS_HEADERS, jsonResponse as respond, errorMessage } from "../_shared/http.ts";
 
 // ── Config ─────────────────────────────────────────────────────────────────
 
 // Reuses the same key as the enrich function -- same kind of task
 // (Claude + web search, structured verdict), no reason for a separate one.
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_ENRICH_API_KEY")!;
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ANTHROPIC_ENRICH_API_KEY = requireEnv("ANTHROPIC_ENRICH_API_KEY");
+const SUPABASE_URL = requireEnv("SUPABASE_URL");
+const SUPABASE_SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
-function respond(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-}
 
 // ── Prompt ─────────────────────────────────────────────────────────────────
 //
@@ -76,7 +73,7 @@ const STATUS_BY_VERDICT: Record<string, string> = {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response("ok", { headers: CORS_HEADERS });
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -103,11 +100,11 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
+        "x-api-key": ANTHROPIC_ENRICH_API_KEY,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5",
+        model: TALENT_REVIEW_MODEL,
         max_tokens: 2048,
         system: [
           {
@@ -144,9 +141,9 @@ Deno.serve(async (req) => {
       throw new Error(`Claude API error ${claudeRes.status}: ${errText}`);
     }
 
-    const claudeData = await claudeRes.json();
-    const toolUse = claudeData.content?.find(
-      (c: any) => c.type === "tool_use" && c.name === "resolve_talent_name"
+    const claudeData: AnthropicResponse = await claudeRes.json();
+    const toolUse = claudeData.content?.find((c) =>
+      isToolUseBlock(c, "resolve_talent_name")
     );
 
     if (!toolUse) {
@@ -163,9 +160,7 @@ Deno.serve(async (req) => {
     // based on Anthropic's docs at time of writing; verify against an
     // actual response if this ever reads as false when you can see from
     // `reasoning` that Claude clearly did search.
-    const usedWebSearch = claudeData.content?.some(
-      (c: any) => c.type === "server_tool_use" || c.type === "web_search_tool_result"
-    ) ?? false;
+    const usedWebSearch = responseUsedWebSearch(claudeData);
 
     const verdict = toolUse.input as {
       verdict: "real_name" | "likely_split" | "uncertain";
@@ -194,10 +189,10 @@ Deno.serve(async (req) => {
     if (updateError) throw updateError;
 
     return respond({ success: true, candidate_name: review.candidate_name, verdict });
-  } catch (err: any) {
+  } catch (err) {
     // Leave status='pending' on failure -- retries next invocation
     // rather than being silently marked resolved.
     console.error(`resolve-talent-review failed for "${review.candidate_name}":`, err);
-    return respond({ error: err.message, candidate_name: review.candidate_name }, 500);
+    return respond({ error: errorMessage(err), candidate_name: review.candidate_name }, 500);
   }
 });

@@ -31,10 +31,13 @@
 //   - DB trigger handles confidence recomputation after each verification insert
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { requireEnv } from "../_shared/env.ts";
+import { ENRICH_FIRST_PASS_MODEL, ENRICH_REPEAT_MODEL } from "../_shared/models.ts";
+import { type AnthropicResponse, isTextBlock } from "../_shared/anthropic.ts";
 
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_ENRICH_API_KEY")!;
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ANTHROPIC_ENRICH_API_KEY = requireEnv("ANTHROPIC_ENRICH_API_KEY");
+const SUPABASE_URL = requireEnv("SUPABASE_URL");
+const SUPABASE_SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 
 // One event per invocation — stays well within the 150s function timeout.
 // Raise this only once you've confirmed typical execution time under ~90s.
@@ -109,8 +112,33 @@ interface EnrichmentData {
   venue_context: string | null;
   ticket_url: string | null;
   sold_out: boolean | null;
-  found: EnrichmentFound;
+  // Defaults to {} when the model omits it — every key is optional in practice.
+  found: Partial<EnrichmentFound>;
   sources: EnrichmentSource[];
+}
+
+// Shapes of the PostgREST embedded-resource joins used below. The edge-side
+// Supabase client has no Database generic, so joins come back untyped and have
+// to be described here.
+interface BoardGeoJoin {
+  board_id: string;
+  boards: {
+    geolocation:      unknown;
+    geo_city:         string | null;
+    geo_region:       string | null;
+    geo_country:      string | null;
+    geo_neighborhood: string | null;
+  } | null;
+}
+
+// The raw selected row: every EventRow column except the two that are derived
+// from the joins below rather than selected directly.
+interface QueuedEventRow extends Omit<EventRow, "organization_name" | "talent_names"> {
+  organizations: { name: string | null } | null;
+  event_talent: Array<{
+    billing_position: number | null;
+    talent: { name: string | null } | null;
+  }> | null;
 }
 
 type SourceType =
@@ -321,8 +349,12 @@ async function getBoardLocation(
 
   if (!data) return null;
 
-  const board = (data as any).boards;
-  const coords = parseGeoPoint(board?.geolocation);
+  const { board_id: boardId, boards: board } = data as unknown as BoardGeoJoin;
+  // The !inner join means a row implies a board, but PostgREST types it as
+  // nullable and nothing enforces that here — guard rather than assert.
+  if (!board) return null;
+
+  const coords = parseGeoPoint(board.geolocation);
   if (!coords) return null;
 
   const userLocation: UserLocation | null = board.geo_city
@@ -335,7 +367,7 @@ async function getBoardLocation(
       }
     : null;
 
-  return { board_id: (data as any).board_id, coords, userLocation };
+  return { board_id: boardId, coords, userLocation };
 }
 
 async function saveBoardGeo(
@@ -590,14 +622,14 @@ async function callEnrichmentApi(
   // Re-enrichment passes get Haiku — they're checking whether new signal
   // changes results, not writing fresh prose.
   const model = event.enrichment_attempt_count === 0
-    ? "claude-sonnet-4-6"
-    : "claude-haiku-4-5";
+    ? ENRICH_FIRST_PASS_MODEL
+    : ENRICH_REPEAT_MODEL;
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
+      "x-api-key": ANTHROPIC_ENRICH_API_KEY,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
@@ -626,14 +658,13 @@ async function callEnrichmentApi(
     return { failed: true, data: null };
   }
 
-  const data = await response.json();
+  const data: AnthropicResponse = await response.json();
 
-  const textBlocks = (data.content as Array<{ type: string; text?: string }>)
-    .filter((b) => b.type === "text" && b.text);
+  const textBlocks = (data.content ?? []).filter(isTextBlock).filter((b) => b.text);
 
   if (textBlocks.length === 0) return { failed: true, data: null };
 
-  const raw = textBlocks.map((b) => b.text!).join("").trim();
+  const raw = textBlocks.map((b) => b.text).join("").trim();
 
   // Extract JSON robustly — Claude sometimes adds prose before or after the
   // JSON object despite instructions. Try three strategies in order:
@@ -649,9 +680,11 @@ async function callEnrichmentApi(
     return text.trim();
   }
 
-  let parsed: any;
+  // Whatever the model returned — every field is read defensively below,
+  // so Partial is the honest type rather than asserting the full shape.
+  let parsed: Partial<EnrichmentData>;
   try {
-    parsed = JSON.parse(extractJson(raw));
+    parsed = JSON.parse(extractJson(raw)) as Partial<EnrichmentData>;
   } catch (e) {
     console.error(`JSON parse failed for event ${event.id}:`, e, "\nRaw:", raw.slice(0, 300));
     return { failed: true, data: null };
@@ -876,18 +909,21 @@ async function fetchEventsNeedingEnrichment(
 
   if (error) throw error;
 
-  return (data ?? []).map((row: any) => ({
-    ...row,
-    organization_name: row.organizations?.name ?? null,
-    talent_names: (row.event_talent ?? [])
-      .sort((a: any, b: any) =>
-        (a.billing_position ?? 999) - (b.billing_position ?? 999)
-      )
-      .map((et: any) => et.talent?.name)
-      .filter(Boolean),
-    organizations: undefined,
-    event_talent: undefined,
-  }));
+  return ((data ?? []) as unknown as QueuedEventRow[]).map((row) => {
+    // Destructured out rather than overwritten with undefined — the join keys
+    // are removed from the shape entirely, which is what EventRow describes.
+    const { organizations, event_talent, ...rest } = row;
+    return {
+      ...rest,
+      organization_name: organizations?.name ?? null,
+      talent_names: [...(event_talent ?? [])]
+        .sort((a, b) =>
+          (a.billing_position ?? 999) - (b.billing_position ?? 999)
+        )
+        .map((et) => et.talent?.name)
+        .filter((n): n is string => Boolean(n)),
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
