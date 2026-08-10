@@ -18,7 +18,7 @@
 
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { PageHeader } from '@/app/components/page-header'
 
@@ -39,9 +39,14 @@ export default function ContactPage() {
   const [company, setCompany] = useState('') // honeypot — real visitors never see this field
   const [status, setStatus] = useState<Status>('idle')
 
-  // Captured once on mount, not on every render — the API route checks
-  // how much time passed between page load and submit.
-  const renderedAtRef = useRef(Date.now())
+  // The API route checks how much time passed between page load and submit.
+  // Stamped in an effect rather than `useRef(Date.now())` — the latter re-runs
+  // Date.now() on every render (discarding the result) and is an impure call
+  // during render, which React's lint rules correctly reject.
+  const renderedAtRef = useRef<number | null>(null)
+  useEffect(() => {
+    renderedAtRef.current = Date.now()
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -58,7 +63,7 @@ export default function ContactPage() {
           message: message.trim(),
           context_url: window.location.href,
           company,
-          renderedAt: renderedAtRef.current,
+          renderedAt: renderedAtRef.current ?? undefined,
         }),
       })
       if (!res.ok) throw new Error('request failed')

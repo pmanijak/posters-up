@@ -33,7 +33,7 @@ export function SearchResults() {
       {data && status === 'idle' && (
         Object.keys(data.events).length === 0 ? (
           <p className="text-sm text-content-muted">
-            Nothing found for "{query}". New events appear as more boards are photographed.
+            Nothing found for &ldquo;{query}&rdquo;. New events appear as more boards are photographed.
           </p>
         ) : (
           <>
@@ -64,7 +64,7 @@ export function SearchResults() {
               </section>
             )}
             <p className="text-center text-xs pt-4 text-content-muted">
-              {displayedCount} events · "{query}"
+              {displayedCount} events · &ldquo;{query}&rdquo;
             </p>
           </>
         )
