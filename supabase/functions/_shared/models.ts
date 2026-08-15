@@ -26,7 +26,7 @@
 export const EXTRACT_MODEL = "claude-sonnet-5";
 
 /** Enrichment, first pass — writes narrative prose and talent bios. */
-export const ENRICH_FIRST_PASS_MODEL = "claude-sonnet-4-6";
+export const ENRICH_FIRST_PASS_MODEL = "claude-sonnet-5";
 
 /** Enrichment, re-enrichment passes — cheaper; checks whether new signal changes results. */
 export const ENRICH_REPEAT_MODEL = "claude-haiku-4-5";

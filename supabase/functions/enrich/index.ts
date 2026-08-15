@@ -634,7 +634,15 @@ async function callEnrichmentApi(
     },
     body: JSON.stringify({
       model,
-      max_tokens: 2000,
+      max_tokens: 3000,
+      // Sonnet 5 runs adaptive thinking by default when this field is omitted
+      // — a behavior change from 4.6 (see the same fix in extract/index.ts).
+      // Disabled here for the same reason: the model already reasons visibly
+      // through its web_search tool calls and the EVENT/DATE IDENTITY checks
+      // are spelled out as explicit rules to apply, not open-ended judgment
+      // calls that benefit from hidden chain-of-thought. Hidden thinking would
+      // just compete with the final JSON for this budget.
+      thinking: { type: "disabled" },
       system: [
         {
           type: "text",
